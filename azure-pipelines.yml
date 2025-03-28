@@ -50,6 +50,30 @@ stages:
         cp .env.example $(Build.ArtifactStagingDirectory)/deploy/.env
         cp codepush-infrastructure.bicep $(Build.ArtifactStagingDirectory)/deploy/ 2>/dev/null || :
         
+        # Create a custom server.js that bypasses SSL certificate checks
+        mkdir -p $(Build.ArtifactStagingDirectory)/deploy/custom
+        cat > $(Build.ArtifactStagingDirectory)/deploy/custom/server.js << 'EOF'
+        // Custom server entry point that bypasses certificate checks
+        const defaultServer = require('../bin/script/default-server');
+
+        // Force HTTPS to false to avoid certificate errors
+        process.env.HTTPS = 'false';
+
+        defaultServer.start(function (err, app) {
+          if (err) {
+            console.error('Error starting server:', err);
+            throw err;
+          }
+
+          const port = process.env.PORT || 8080;
+          const server = app.listen(port, function () {
+            console.log('API host listening at http://localhost:' + port);
+          });
+
+          server.setTimeout(0);
+        });
+        EOF
+        
         # Verify dependencies in deployment directory
         if [ ! -d "$(Build.ArtifactStagingDirectory)/deploy/node_modules/express" ]; then
           echo "ERROR: Express module not found in deployment directory!"
@@ -65,38 +89,13 @@ stages:
         echo "cd /home/site/wwwroot" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
         echo "export PORT=8080" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
         echo "export NODE_ENV=production" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "# Create dummy certs directory to avoid errors" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "mkdir -p ./certs" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "# Explicitly set HTTPS=false to avoid certificate errors" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
         echo "export HTTPS=false" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "if [ ! -f /home/site/wwwroot/bin/script/server.js ]; then" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "  echo 'Error: server.js not found!'" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "  exit 1" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "fi" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "# Create a custom server entry point that bypasses certificate checks" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "cat > ./custom-server.js << 'EOF'" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "// Custom server entry point that bypasses certificate checks" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "const defaultServer = require('./bin/script/default-server');" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "process.env.HTTPS = 'false';" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "defaultServer.start(function (err, app) {" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "  if (err) { throw err; }" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "  const port = process.env.PORT || 8080;" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "  const server = app.listen(port, function () {" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "    console.log('API host listening at http://localhost:' + port);" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "  });" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "  server.setTimeout(0);" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "});" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "EOF" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "node ./custom-server.js" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "mkdir -p ./certs" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "touch ./certs/cert.key" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "touch ./certs/cert.crt" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "node ./custom/server.js" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
         chmod +x $(Build.ArtifactStagingDirectory)/deploy/startup.sh
       displayName: 'Create Startup Script'
-
-    # Create an empty certs directory to avoid errors
-    - script: |
-        mkdir -p $(Build.ArtifactStagingDirectory)/deploy/certs
-        touch $(Build.ArtifactStagingDirectory)/deploy/certs/cert.key
-        touch $(Build.ArtifactStagingDirectory)/deploy/certs/cert.crt
-      displayName: 'Create Empty Certs Directory'
 
     # Create web.config for Azure with improved configuration
     - script: |
@@ -105,12 +104,12 @@ stages:
         echo '  <system.webServer>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
         echo '    <webSocket enabled="false" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
         echo '    <handlers>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '      <add name="iisnode" path="bin/script/server.js" verb="*" modules="iisnode" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '      <add name="iisnode" path="custom/server.js" verb="*" modules="iisnode" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
         echo '    </handlers>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
         echo '    <rewrite>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
         echo '      <rules>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
         echo '        <rule name="NodeInspector" patternSyntax="ECMAScript" stopProcessing="true">' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '          <match url="^bin/script/server.js\/debug[\/]?" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '          <match url="^custom/server.js\/debug[\/]?" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
         echo '        </rule>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
         echo '        <rule name="StaticContent">' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
         echo '          <action type="Rewrite" url="public{REQUEST_URI}" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
@@ -119,7 +118,7 @@ stages:
         echo '          <conditions>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
         echo '            <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="True" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
         echo '          </conditions>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '          <action type="Rewrite" url="bin/script/server.js" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '          <action type="Rewrite" url="custom/server.js" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
         echo '        </rule>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
         echo '      </rules>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
         echo '    </rewrite>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
