@@ -54,6 +54,39 @@ stages:
         mkdir -p $(Build.ArtifactStagingDirectory)/deploy/certs
         openssl req -x509 -newkey rsa:4096 -keyout $(Build.ArtifactStagingDirectory)/deploy/certs/cert.key -out $(Build.ArtifactStagingDirectory)/deploy/certs/cert.crt -days 365 -nodes -subj "/CN=codepush-ap21.azurewebsites.net"
         
+        # Create a custom wrapper for package.json that ensures dependencies are installed
+        cat > $(Build.ArtifactStagingDirectory)/deploy/package.json << 'EOF'
+        {
+          "name": "code-push-server",
+          "version": "0.0.1",
+          "description": "Code Push Server for App deployment",
+          "main": "./bin/script/server.js",
+          "scripts": {
+            "start": "bash ./fix-dependencies.sh && node ./bin/script/server.js",
+            "test": "echo \"Error: no test specified\" && exit 1"
+          },
+          "dependencies": {
+            "express": "^4.17.1"
+          },
+          "engines": {
+            "node": ">=18.0.0"
+          }
+        }
+        EOF
+        
+        # Create fix-dependencies.sh to install missing dependencies
+        cat > $(Build.ArtifactStagingDirectory)/deploy/fix-dependencies.sh << 'EOF'
+        #!/bin/bash
+        echo "Checking for Express module..."
+        if [ ! -d "node_modules/express" ]; then
+          echo "Express module not found! Installing dependencies..."
+          npm install
+        else
+          echo "Express module found, continuing..."
+        fi
+        EOF
+        chmod +x $(Build.ArtifactStagingDirectory)/deploy/fix-dependencies.sh
+        
         # Verify dependencies in deployment directory
         if [ ! -d "$(Build.ArtifactStagingDirectory)/deploy/node_modules/express" ]; then
           echo "ERROR: Express module not found in deployment directory!"
@@ -242,7 +275,12 @@ stages:
               "slotSetting": false
             },
             {
-              "name": "WEBSITE_WEBDEPLOY_USE_SCM",
+              "name": "WEBSITES_CONTAINER_START_TIME_LIMIT",
+              "value": "300",
+              "slotSetting": false
+            },
+            {
+              "name": "WEBSITES_WEBDEPLOY_USE_SCM",
               "value": "false",
               "slotSetting": false
             }
