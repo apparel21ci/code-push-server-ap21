@@ -44,6 +44,84 @@ stages:
         cp .env.example $(Build.ArtifactStagingDirectory)/deploy/.env
         cp codepush-infrastructure.bicep $(Build.ArtifactStagingDirectory)/deploy/ 2>/dev/null || :
         
+        # Modified package.json with custom start script
+        cat > $(Build.ArtifactStagingDirectory)/deploy/package.json << 'EOF'
+        {
+          "name": "code-push-server",
+          "version": "0.0.1",
+          "main": "./bin/script/server.js",
+          "scripts": {
+            "prestart": "bash ./fix-dependencies.sh",
+            "start": "node ./bin/script/server.js"
+          },
+          "dependencies": {
+            "express": "^4.17.1",
+            "body-parser": "^1.19.0",
+            "cookie-parser": "^1.4.5",
+            "morgan": "^1.10.0",
+            "request": "^2.88.2"
+          }
+        }
+        EOF
+        
+        # Create server startup wrapper
+        cat > $(Build.ArtifactStagingDirectory)/deploy/server.js << 'EOF'
+        #!/usr/bin/env node
+        
+        console.log('Starting code-push-server with dependency check...');
+        
+        // First check if express exists
+        try {
+          require.resolve('express');
+          console.log('Express module found, continuing startup');
+        } catch (e) {
+          console.log('Express module not found, installing dependencies...');
+          const { execSync } = require('child_process');
+          try {
+            console.log(execSync('npm install --production').toString());
+            console.log('Dependencies installed successfully');
+          } catch (err) {
+            console.error('Failed to install dependencies:', err);
+            process.exit(1);
+          }
+        }
+        
+        // Start the actual server
+        try {
+          require('./bin/script/server.js');
+        } catch (err) {
+          console.error('Error starting server:', err);
+          process.exit(1);
+        }
+        EOF
+        
+        # Create web.config for Azure App Service
+        cat > $(Build.ArtifactStagingDirectory)/deploy/web.config << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <system.webServer>
+            <webSocket enabled="false" />
+            <handlers>
+              <add name="iisnode" path="server.js" verb="*" modules="iisnode"/>
+            </handlers>
+            <rewrite>
+              <rules>
+                <rule name="StaticContent">
+                  <action type="Rewrite" url="public{REQUEST_URI}"/>
+                </rule>
+                <rule name="DynamicContent">
+                  <conditions>
+                    <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="True"/>
+                  </conditions>
+                  <action type="Rewrite" url="server.js"/>
+                </rule>
+              </rules>
+            </rewrite>
+            <iisnode watchedFiles="*.js;node_modules\*;bin\*" nodeProcessCommandLine="node.exe" loggingEnabled="true" debuggingEnabled="false" />
+          </system.webServer>
+        </configuration>
+        EOF
+        
         # Create fix-dependencies.sh script
         cat > $(Build.ArtifactStagingDirectory)/deploy/fix-dependencies.sh << 'EOF'
         #!/bin/bash
@@ -80,22 +158,6 @@ stages:
         echo "----------------------------------------------------"
         EOF
         chmod +x $(Build.ArtifactStagingDirectory)/deploy/fix-dependencies.sh
-        
-        # Modified package.json with custom start script
-        cat > $(Build.ArtifactStagingDirectory)/deploy/package.json << 'EOF'
-        {
-          "name": "code-push-server",
-          "version": "0.0.1",
-          "main": "./bin/script/server.js",
-          "scripts": {
-            "start": "bash ./fix-dependencies.sh && node ./bin/script/server.js",
-            "test": "echo \"Error: no test specified\" && exit 1"
-          },
-          "dependencies": {
-            "express": "^4.17.1"
-          }
-        }
-        EOF
         
         # Generate SSL certificates for HTTPS
         mkdir -p $(Build.ArtifactStagingDirectory)/deploy/certs
@@ -186,7 +248,7 @@ stages:
             },
             {
               "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
-              "value": "false",
+              "value": "true",
               "slotSetting": false
             },
             {
@@ -232,6 +294,11 @@ stages:
             {
               "name": "WEBSITES_WEBDEPLOY_USE_SCM",
               "value": "false",
+              "slotSetting": false
+            },
+            {
+              "name": "COMMAND_LINE_ARGS",
+              "value": "server.js",
               "slotSetting": false
             }
           ]
