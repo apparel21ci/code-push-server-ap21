@@ -266,8 +266,8 @@ stages:
           # Create web app if needed
           if (-not $webAppExists) {
             Write-Host "Creating Windows Web App..."
-            # Create with a known good runtime for Windows
-            az webapp create --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --plan "$(webAppName)-plan" --runtime "DOTNET|6.0"
+            # Create Windows web app without specifying runtime
+            az webapp create --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --plan "$(webAppName)-plan" --os-type Windows
             
             # Configure for Node.js
             Write-Host "Configuring for Node.js..."
