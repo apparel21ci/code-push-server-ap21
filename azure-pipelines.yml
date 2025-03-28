@@ -2,7 +2,7 @@ trigger:
   - main  # or your default branch
 
 pool:
-  vmImage: 'ubuntu-22.04'  # Use ubuntu-22.04 for better tool compatibility
+  vmImage: 'windows-2022'  # Use windows-2022 for Windows App Service deployment
 
 variables:
   # Update these values according to your setup
@@ -11,6 +11,8 @@ variables:
   projectSuffix: 'ap21'   # Same as used in infrastructure deployment
   azLocation: 'australiasoutheast'  # Your Azure region
   serverUrl: 'https://$(webAppName)-$(projectSuffix).azurewebsites.net'
+  # Specify Windows OS
+  appServicePlanOS: 'Windows'
 
 stages:
 - stage: Build
@@ -51,7 +53,7 @@ stages:
           "version": "0.0.1",
           "main": "./bin/script/server.js",
           "scripts": {
-            "prestart": "bash ./fix-dependencies.sh",
+            "prestart": "node install-dependencies.js",
             "start": "node ./bin/script/server.js"
           },
           "dependencies": {
@@ -60,8 +62,64 @@ stages:
             "cookie-parser": "^1.4.5",
             "morgan": "^1.10.0",
             "request": "^2.88.2"
+          },
+          "engines": {
+            "node": ">=18.0.0"
           }
         }
+        EOF
+        
+        # Create dependency installer for Windows
+        cat > $(Build.ArtifactStagingDirectory)/deploy/install-dependencies.js << 'EOF'
+        const fs = require('fs');
+        const { execSync } = require('child_process');
+
+        console.log('Windows Node.js environment - Checking dependencies...');
+        console.log('Current directory:', process.cwd());
+        
+        try {
+          require.resolve('express');
+          console.log('Express module found, continuing startup');
+        } catch (e) {
+          console.log('Express module not found, installing dependencies...');
+          try {
+            console.log(execSync('npm install --production').toString());
+            console.log('Dependencies installed successfully');
+          } catch (err) {
+            console.error('Failed to install dependencies:', err);
+            process.exit(1);
+          }
+        }
+        EOF
+        
+        # Create web.config for Windows IIS
+        cat > $(Build.ArtifactStagingDirectory)/deploy/web.config << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <system.webServer>
+            <webSocket enabled="false" />
+            <handlers>
+              <add name="iisnode" path="bin/script/server.js" verb="*" modules="iisnode" />
+            </handlers>
+            <rewrite>
+              <rules>
+                <rule name="NodeInspector" patternSyntax="ECMAScript" stopProcessing="true">
+                  <match url="^bin/script/server.js\/debug[\/]?" />
+                </rule>
+                <rule name="StaticContent">
+                  <action type="Rewrite" url="public{REQUEST_URI}" />
+                </rule>
+                <rule name="DynamicContent">
+                  <conditions>
+                    <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="True" />
+                  </conditions>
+                  <action type="Rewrite" url="bin/script/server.js" />
+                </rule>
+              </rules>
+            </rewrite>
+            <iisnode nodeProcessCommandLine="node.exe" watchedFiles="*.js;node_modules\*;bin\*" loggingEnabled="true" />
+          </system.webServer>
+        </configuration>
         EOF
         
         # Create server startup wrapper
@@ -93,33 +151,6 @@ stages:
           console.error('Error starting server:', err);
           process.exit(1);
         }
-        EOF
-        
-        # Create web.config for Azure App Service
-        cat > $(Build.ArtifactStagingDirectory)/deploy/web.config << 'EOF'
-        <?xml version="1.0" encoding="utf-8"?>
-        <configuration>
-          <system.webServer>
-            <webSocket enabled="false" />
-            <handlers>
-              <add name="iisnode" path="server.js" verb="*" modules="iisnode"/>
-            </handlers>
-            <rewrite>
-              <rules>
-                <rule name="StaticContent">
-                  <action type="Rewrite" url="public{REQUEST_URI}"/>
-                </rule>
-                <rule name="DynamicContent">
-                  <conditions>
-                    <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="True"/>
-                  </conditions>
-                  <action type="Rewrite" url="server.js"/>
-                </rule>
-              </rules>
-            </rewrite>
-            <iisnode watchedFiles="*.js;node_modules\*;bin\*" nodeProcessCommandLine="node.exe" loggingEnabled="true" debuggingEnabled="false" />
-          </system.webServer>
-        </configuration>
         EOF
         
         # Create fix-dependencies.sh script
@@ -213,6 +244,36 @@ stages:
         deploymentMethod: 'auto'
       displayName: 'Deploy Azure Web App'
 
+    # Create the Windows App Service if it doesn't exist
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: 'Codepush SC'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          # Check if the app service plan exists
+          APP_SERVICE_PLAN_EXISTS=$(az appservice plan show --name $(webAppName)-plan --resource-group $(resourceGroupName) --query "name" --output tsv 2>/dev/null || echo "")
+          
+          # Create an App Service Plan if it doesn't exist
+          if [ -z "$APP_SERVICE_PLAN_EXISTS" ]; then
+            echo "Creating Windows App Service Plan..."
+            az appservice plan create --name $(webAppName)-plan --resource-group $(resourceGroupName) --sku S1 --is-linux false
+          else
+            echo "App Service Plan already exists."
+          fi
+          
+          # Check if the web app exists
+          WEBAPP_EXISTS=$(az webapp show --name $(webAppName)-$(projectSuffix) --resource-group $(resourceGroupName) --query "name" --output tsv 2>/dev/null || echo "")
+          
+          # Create the web app if it doesn't exist
+          if [ -z "$WEBAPP_EXISTS" ]; then
+            echo "Creating Windows Web App..."
+            az webapp create --name $(webAppName)-$(projectSuffix) --resource-group $(resourceGroupName) --plan $(webAppName)-plan --runtime "NODE|18-lts"
+          else
+            echo "Web App already exists."
+          fi
+      displayName: 'Ensure Windows App Service Exists'
+
     # Optional: Configure App Settings
     - task: AzureAppServiceSettings@1
       inputs:
@@ -252,13 +313,18 @@ stages:
               "slotSetting": false
             },
             {
-              "name": "POST_BUILD_COMMAND",
-              "value": "bash ./fix-dependencies.sh",
+              "name": "WEBSITE_RUN_FROM_PACKAGE",
+              "value": "0", 
               "slotSetting": false
             },
             {
-              "name": "PRE_BUILD_COMMAND",
-              "value": "echo 'Running pre-build command to ensure dependencies'",
+              "name": "NODE_PENDING_PIPE_INSTANCES",
+              "value": "25",
+              "slotSetting": false
+            },
+            {
+              "name": "WEBSITE_OVERRIDE_NODE_DEFAULT_VERSION",
+              "value": "18.20.7",
               "slotSetting": false
             },
             {
@@ -274,11 +340,6 @@ stages:
             {
               "name": "LOGGING",
               "value": "true",
-              "slotSetting": false
-            },
-            {
-              "name": "WEBSITE_RUN_FROM_PACKAGE",
-              "value": "0",
               "slotSetting": false
             },
             {
