@@ -266,14 +266,14 @@ stages:
           # Create web app if needed
           if (-not $webAppExists) {
             Write-Host "Creating Windows Web App..."
-            az webapp create --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --plan "$(webAppName)-plan" --runtime "node|18-lts"
+            az webapp create --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --plan "$(webAppName)-plan" --runtime node:18-lts
             
             # Ensure it's configured as Windows
             Write-Host "Ensuring Windows configuration..."
-            az webapp config set --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --windows-fx-version "node|18-lts"
+            az webapp config set --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --windows-fx-version node:18-lts
           } else {
             Write-Host "Web App already exists. Ensuring Windows configuration..."
-            az webapp config set --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --windows-fx-version "node|18-lts"
+            az webapp config set --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --windows-fx-version node:18-lts
           }
       displayName: 'Ensure Windows App Service Exists'
 
