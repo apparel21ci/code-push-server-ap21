@@ -201,7 +201,7 @@ stages:
     - task: AzureCLI@2
       inputs:
         azureSubscription: 'Codepush SC'
-        scriptType: 'powershell'
+        scriptType: 'ps'
         scriptLocation: 'inlineScript'
         inlineScript: |
           # Check if the app service plan exists
