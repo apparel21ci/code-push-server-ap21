@@ -44,6 +44,39 @@ stages:
         cp .env.example $(Build.ArtifactStagingDirectory)/deploy/.env
         cp codepush-infrastructure.bicep $(Build.ArtifactStagingDirectory)/deploy/ 2>/dev/null || :
         
+        # Create fix-dependencies.sh script
+        cat > $(Build.ArtifactStagingDirectory)/deploy/fix-dependencies.sh << 'EOF'
+        #!/bin/bash
+        echo "Checking for Express module..."
+        if [ ! -d "node_modules/express" ]; then
+          echo "Express module not found! Installing dependencies..."
+          npm install express --save
+          if [ ! -d "node_modules/express" ]; then
+            echo "Express still not found after npm install. Trying again with full dependencies..."
+            npm install
+          fi
+        else
+          echo "Express module found, continuing..."
+        fi
+        EOF
+        chmod +x $(Build.ArtifactStagingDirectory)/deploy/fix-dependencies.sh
+        
+        # Modified package.json with custom start script
+        cat > $(Build.ArtifactStagingDirectory)/deploy/package.json << 'EOF'
+        {
+          "name": "code-push-server",
+          "version": "0.0.1",
+          "main": "./bin/script/server.js",
+          "scripts": {
+            "start": "bash ./fix-dependencies.sh && node ./bin/script/server.js",
+            "test": "echo \"Error: no test specified\" && exit 1"
+          },
+          "dependencies": {
+            "express": "^4.17.1"
+          }
+        }
+        EOF
+        
         # Generate SSL certificates for HTTPS
         mkdir -p $(Build.ArtifactStagingDirectory)/deploy/certs
         openssl req -x509 -newkey rsa:4096 -keyout $(Build.ArtifactStagingDirectory)/deploy/certs/cert.key -out $(Build.ArtifactStagingDirectory)/deploy/certs/cert.crt -days 365 -nodes -subj "/CN=codepush-ap21.azurewebsites.net"
