@@ -65,13 +65,38 @@ stages:
         echo "cd /home/site/wwwroot" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
         echo "export PORT=8080" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
         echo "export NODE_ENV=production" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "# Create dummy certs directory to avoid errors" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "mkdir -p ./certs" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "# Explicitly set HTTPS=false to avoid certificate errors" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "export HTTPS=false" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
         echo "if [ ! -f /home/site/wwwroot/bin/script/server.js ]; then" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
         echo "  echo 'Error: server.js not found!'" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
         echo "  exit 1" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
         echo "fi" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "node ./bin/script/server.js" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "# Create a custom server entry point that bypasses certificate checks" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "cat > ./custom-server.js << 'EOF'" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "// Custom server entry point that bypasses certificate checks" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "const defaultServer = require('./bin/script/default-server');" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "process.env.HTTPS = 'false';" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "defaultServer.start(function (err, app) {" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "  if (err) { throw err; }" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "  const port = process.env.PORT || 8080;" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "  const server = app.listen(port, function () {" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "    console.log('API host listening at http://localhost:' + port);" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "  });" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "  server.setTimeout(0);" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "});" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "EOF" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "node ./custom-server.js" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
         chmod +x $(Build.ArtifactStagingDirectory)/deploy/startup.sh
       displayName: 'Create Startup Script'
+
+    # Create an empty certs directory to avoid errors
+    - script: |
+        mkdir -p $(Build.ArtifactStagingDirectory)/deploy/certs
+        touch $(Build.ArtifactStagingDirectory)/deploy/certs/cert.key
+        touch $(Build.ArtifactStagingDirectory)/deploy/certs/cert.crt
+      displayName: 'Create Empty Certs Directory'
 
     # Create web.config for Azure with improved configuration
     - script: |
@@ -189,7 +214,7 @@ stages:
             },
             {
               "name": "HTTPS",
-              "value": "true",
+              "value": "false",
               "slotSetting": false
             },
             {
@@ -220,6 +245,21 @@ stages:
             {
               "name": "WEBSITE_RUN_FROM_PACKAGE",
               "value": "0",
+              "slotSetting": false
+            },
+            {
+              "name": "REDIS_HOST",
+              "value": "none",
+              "slotSetting": false
+            },
+            {
+              "name": "DISABLE_REDIS",
+              "value": "true",
+              "slotSetting": false
+            },
+            {
+              "name": "WEBSITE_WEBDEPLOY_USE_SCM",
+              "value": "false",
               "slotSetting": false
             }
           ]
