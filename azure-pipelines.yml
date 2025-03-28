@@ -24,19 +24,22 @@ stages:
       displayName: 'Install Node.js'
 
     - script: |
+        cd api
         npm install
         npm run build
-      displayName: 'npm install and build'
+      displayName: 'Build API Server'
 
     - task: CopyFiles@2
       inputs:
-        SourceFolder: '$(System.DefaultWorkingDirectory)'
+        SourceFolder: '$(System.DefaultWorkingDirectory)/api'
         Contents: |
-          **/*
-          !node_modules/**
-          !.git/**
+          bin/**
+          package.json
+          package-lock.json
+          .env.example
+          codepush-infrastructure.bicep
         TargetFolder: '$(Build.ArtifactStagingDirectory)'
-      displayName: 'Copy Files'
+      displayName: 'Copy API Files'
 
     - task: ArchiveFiles@2
       inputs:
@@ -78,7 +81,7 @@ stages:
     # You need to create this in Azure DevOps Project Settings > Service Connections
     - task: AzureWebApp@1
       inputs:
-        azureSubscription: 'Codepush SC'  # REPLACE THIS with your Azure RM service connection name
+        azureSubscription: 'Codepush SC'  # Your Azure RM service connection name
         appType: 'webApp'
         appName: '$(webAppName)'
         package: '$(System.ArtifactsDirectory)/drop/$(webAppName).zip'
@@ -88,7 +91,7 @@ stages:
     # Optional: Configure App Settings
     - task: AzureAppServiceSettings@1
       inputs:
-        azureSubscription: 'Codepush SC'  # REPLACE THIS with your Azure RM service connection name
+        azureSubscription: 'Codepush SC'  # Your Azure RM service connection name
         appName: '$(webAppName)'
         resourceGroupName: '$(resourceGroupName)'
         appSettings: |
@@ -115,21 +118,3 @@ stages:
             }
           ]
       displayName: 'Configure App Settings'
-
-    # Uncomment this if you need to deploy infrastructure
-    # - task: AzureCLI@2
-    #   inputs:
-    #     azureSubscription: 'YourAzureRMConnection'  # REPLACE THIS with your Azure RM service connection name
-    #     scriptType: 'bash'
-    #     scriptLocation: 'inlineScript'
-    #     inlineScript: |
-    #       az deployment group create \
-    #         --resource-group $(resourceGroupName) \
-    #         --template-file ./codepush-infrastructure.bicep \
-    #         --parameters project_suffix=$(projectSuffix) \
-    #         az_location=$(azLocation) \
-    #         github_client_id=$(GITHUB_CLIENT_ID) \
-    #         github_client_secret=$(GITHUB_CLIENT_SECRET) \
-    #         microsoft_client_id=$(MICROSOFT_CLIENT_ID) \
-    #         microsoft_client_secret=$(MICROSOFT_CLIENT_SECRET)
-    #   displayName: 'Deploy Azure Infrastructure'
