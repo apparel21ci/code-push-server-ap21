@@ -47,17 +47,37 @@ stages:
         # Create fix-dependencies.sh script
         cat > $(Build.ArtifactStagingDirectory)/deploy/fix-dependencies.sh << 'EOF'
         #!/bin/bash
+        echo "----------------------------------------------------"
+        echo "CodePush Server: Checking dependencies before startup"
+        echo "----------------------------------------------------"
+        echo "Current directory: $(pwd)"
+        echo "Directory contents:"
+        ls -la
+        
         echo "Checking for Express module..."
         if [ ! -d "node_modules/express" ]; then
-          echo "Express module not found! Installing dependencies..."
+          echo "EXPRESS MODULE NOT FOUND! Installing dependencies..."
           npm install express --save
           if [ ! -d "node_modules/express" ]; then
             echo "Express still not found after npm install. Trying again with full dependencies..."
             npm install
+            if [ ! -d "node_modules/express" ]; then
+              echo "CRITICAL: Express module still missing after multiple install attempts"
+              echo "Creating node_modules directory and installing express directly"
+              mkdir -p node_modules
+              cd node_modules
+              # Install express manually
+              npm install express@4.17.1 --no-save
+              cd ..
+            fi
           fi
         else
           echo "Express module found, continuing..."
         fi
+        echo "----------------------------------------------------"
+        echo "Environment variables:"
+        env | sort
+        echo "----------------------------------------------------"
         EOF
         chmod +x $(Build.ArtifactStagingDirectory)/deploy/fix-dependencies.sh
         
@@ -166,7 +186,17 @@ stages:
             },
             {
               "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
-              "value": "true",
+              "value": "false",
+              "slotSetting": false
+            },
+            {
+              "name": "POST_BUILD_COMMAND",
+              "value": "bash ./fix-dependencies.sh",
+              "slotSetting": false
+            },
+            {
+              "name": "PRE_BUILD_COMMAND",
+              "value": "echo 'Running pre-build command to ensure dependencies'",
               "slotSetting": false
             },
             {
