@@ -69,6 +69,11 @@ stages:
         echo "cd /home/site/wwwroot" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
         echo "export PORT=8080" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
         echo "export NODE_ENV=production" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "# Check if node_modules exists and install dependencies if needed" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "if [ ! -d \"node_modules/express\" ]; then" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "  echo 'Express module not found! Installing dependencies...'" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "  npm install" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "fi" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
         echo "if [ ! -f /home/site/wwwroot/bin/script/server.js ]; then" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
         echo "  echo 'Error: server.js not found!'" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
         echo "  exit 1" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
@@ -203,7 +208,7 @@ stages:
             },
             {
               "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
-              "value": "false",
+              "value": "true",
               "slotSetting": false
             },
             {
