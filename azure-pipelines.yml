@@ -156,12 +156,12 @@ stages:
           <system.webServer>
             <webSocket enabled="false" />
             <handlers>
-              <add name="iisnode" path="bin\script\server.js" verb="*" modules="iisnode" />
+              <add name="iisnode" path="startup.js" verb="*" modules="iisnode" />
             </handlers>
             <rewrite>
               <rules>
                 <rule name="NodeInspector" patternSyntax="ECMAScript" stopProcessing="true">
-                  <match url="^bin\\script\\server.js\/debug[\/]?" />
+                  <match url="^startup.js\/debug[\/]?" />
                 </rule>
                 <rule name="StaticContent">
                   <action type="Rewrite" url="public{REQUEST_URI}" />
@@ -170,7 +170,7 @@ stages:
                   <conditions>
                     <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="True" />
                   </conditions>
-                  <action type="Rewrite" url="bin\script\server.js" />
+                  <action type="Rewrite" url="startup.js" />
                 </rule>
               </rules>
             </rewrite>
@@ -247,11 +247,21 @@ stages:
             Write-Host "App Service Plan already exists."
           }
           
-          # Check if the web app exists
+          # Check if the web app exists and if it's Linux
           $webAppExists = $null
+          $isLinux = $false
           try {
-            $webAppExists = az webapp show --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --query "name" --output tsv
+            $webAppInfo = az webapp show --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --query "{name:name, reserved:reserved}" | ConvertFrom-Json
+            $webAppExists = $webAppInfo.name
+            $isLinux = $webAppInfo.reserved
           } catch {}
+          
+          # If it exists and is Linux, delete it
+          if ($webAppExists -and $isLinux) {
+            Write-Host "Existing app is Linux-based. Deleting to recreate as Windows..."
+            az webapp delete --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)"
+            $webAppExists = $null
+          }
           
           # Create web app if needed
           if (-not $webAppExists) {
