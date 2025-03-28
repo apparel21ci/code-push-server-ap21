@@ -52,7 +52,7 @@ stages:
         
         # Generate SSL certificates for HTTPS
         mkdir -p $(Build.ArtifactStagingDirectory)/deploy/certs
-        openssl req -x509 -newkey rsa:4096 -keyout $(Build.ArtifactStagingDirectory)/deploy/certs/cert.key -out $(Build.ArtifactStagingDirectory)/deploy/certs/cert.crt -days 365 -nodes -subj "/CN=localhost"
+        openssl req -x509 -newkey rsa:4096 -keyout $(Build.ArtifactStagingDirectory)/deploy/certs/cert.key -out $(Build.ArtifactStagingDirectory)/deploy/certs/cert.crt -days 365 -nodes -subj "/CN=codepush-ap21.azurewebsites.net"
         
         # Verify dependencies in deployment directory
         if [ ! -d "$(Build.ArtifactStagingDirectory)/deploy/node_modules/express" ]; then
