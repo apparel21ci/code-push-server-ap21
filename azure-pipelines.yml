@@ -64,17 +64,37 @@ stages:
     - powershell: |
         # Create enhanced package.json
         $pkgJson = Get-Content -Raw -Path "$(Build.BinariesDirectory)/temp/package.json" | ConvertFrom-Json
-        $pkgJson.scripts.prestart = "node install-dependencies.js" 
-        $pkgJson.dependencies = @{
+        
+        # Ensure scripts property exists
+        if (-not $pkgJson.PSObject.Properties.Name -contains "scripts") {
+            $pkgJson | Add-Member -MemberType NoteProperty -Name "scripts" -Value @{}
+        }
+        
+        # Add or update scripts
+        $pkgJson.scripts | Add-Member -MemberType NoteProperty -Name "prestart" -Value "node install-dependencies.js" -Force
+        $pkgJson.scripts | Add-Member -MemberType NoteProperty -Name "start" -Value "node ./bin/script/server.js" -Force
+        
+        # Add or update dependencies
+        if (-not $pkgJson.PSObject.Properties.Name -contains "dependencies") {
+            $pkgJson | Add-Member -MemberType NoteProperty -Name "dependencies" -Value @{}
+        }
+        
+        $dependencies = @{
           "express" = "^4.17.1"
           "body-parser" = "^1.19.0"
           "cookie-parser" = "^1.4.5"
           "morgan" = "^1.10.0" 
           "request" = "^2.88.2"
         }
-        $pkgJson.engines = @{ 
-          "node" = ">=18.0.0" 
+        
+        foreach ($key in $dependencies.Keys) {
+            $pkgJson.dependencies | Add-Member -MemberType NoteProperty -Name $key -Value $dependencies[$key] -Force
         }
+        
+        # Add engines
+        $pkgJson | Add-Member -MemberType NoteProperty -Name "engines" -Value @{ "node" = ">=18.0.0" } -Force
+        
+        # Write the updated package.json
         $pkgJson | ConvertTo-Json -Depth 10 | Set-Content -Path "$(Build.ArtifactStagingDirectory)/deploy/package.json"
         
         # Create dependency checker
