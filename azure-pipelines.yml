@@ -158,7 +158,12 @@ stages:
             },
             {
               "name": "REDIS_HOST",
-              "value": "none",
+              "value": "localhost",
+              "slotSetting": false
+            },
+            {
+              "name": "REDIS_PORT",
+              "value": "6379",
               "slotSetting": false
             },
             {
