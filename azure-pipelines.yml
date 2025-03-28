@@ -128,7 +128,7 @@ stages:
         azureSubscription: 'Codepush SC'  # Your Azure RM service connection name
         appType: 'webApp'
         appName: '$(webAppName)-ap21'
-        package: '$(System.ArtifactStagingDirectory)/drop/$(webAppName).zip'
+        package: '$(System.ArtifactsDirectory)/drop/codepush.zip'
         deploymentMethod: 'auto'
       displayName: 'Deploy Azure Web App'
 
