@@ -2,7 +2,7 @@ trigger:
   - main  # or your default branch
 
 pool:
-  vmImage: 'ubuntu-latest'
+  vmImage: 'ubuntu-22.04'  # Use ubuntu-22.04 for better tool compatibility
 
 variables:
   # Update these values according to your setup
@@ -10,7 +10,7 @@ variables:
   webAppName: 'codepush'  # Replace with your Web App name
   projectSuffix: 'ap21'   # Same as used in infrastructure deployment
   azLocation: 'australiasoutheast'  # Your Azure region
-  serverUrl: 'https://$(webAppName).azurewebsites.net'
+  serverUrl: 'https://$(webAppName)-$(projectSuffix).azurewebsites.net'
 
 stages:
 - stage: Build
@@ -29,17 +29,34 @@ stages:
         mkdir -p $(Build.ArtifactStagingDirectory)/deploy
       displayName: 'Create Deployment Directory'
 
-    # Build the API server
+    # Build the API server with improved dependency handling
     - script: |
         cd api
         npm install
         npm run build
+        
+        # Verify express module is installed
+        if [ ! -d "node_modules/express" ]; then
+          echo "Express module not found! Installing dependencies again..."
+          npm install express --save
+        fi
+        
+        # Copy files to deployment directory
         mkdir -p $(Build.ArtifactStagingDirectory)/deploy
         cp -r bin $(Build.ArtifactStagingDirectory)/deploy/
         cp -r node_modules $(Build.ArtifactStagingDirectory)/deploy/
         cp package.json $(Build.ArtifactStagingDirectory)/deploy/
+        cp package-lock.json $(Build.ArtifactStagingDirectory)/deploy/ 2>/dev/null || :
         cp .env.example $(Build.ArtifactStagingDirectory)/deploy/.env
-        cp codepush-infrastructure.bicep $(Build.ArtifactStagingDirectory)/deploy/
+        cp codepush-infrastructure.bicep $(Build.ArtifactStagingDirectory)/deploy/ 2>/dev/null || :
+        
+        # Verify dependencies in deployment directory
+        if [ ! -d "$(Build.ArtifactStagingDirectory)/deploy/node_modules/express" ]; then
+          echo "ERROR: Express module not found in deployment directory!"
+          exit 1
+        else
+          echo "Express module successfully included in deployment package."
+        fi
       displayName: 'Build API Server and Copy Files'
 
     # Create a deployment script with proper error handling
@@ -117,6 +134,21 @@ stages:
         downloadPath: '$(System.ArtifactsDirectory)'
       displayName: 'Download Artifacts'
 
+    # Debug step to verify artifact location and content
+    - script: |
+        echo "Listing downloaded artifacts directory:"
+        ls -la $(System.ArtifactsDirectory)/drop/
+        echo "Verifying zip file exists:"
+        if [ -f "$(System.ArtifactsDirectory)/drop/codepush.zip" ]; then
+          echo "✅ codepush.zip found at expected location"
+          echo "File size: $(du -h $(System.ArtifactsDirectory)/drop/codepush.zip | cut -f1)"
+        else
+          echo "❌ codepush.zip NOT found at expected location"
+          echo "Searching for zip files:"
+          find $(System.ArtifactsDirectory) -name "*.zip" -type f
+        fi
+      displayName: 'Debug Artifact Location'
+
     # Use GitHub service connection for source code checkout
     - checkout: self
       displayName: 'Checkout Source Code'
@@ -127,7 +159,7 @@ stages:
       inputs:
         azureSubscription: 'Codepush SC'  # Your Azure RM service connection name
         appType: 'webApp'
-        appName: '$(webAppName)-ap21'
+        appName: '$(webAppName)-$(projectSuffix)'
         package: '$(System.ArtifactsDirectory)/drop/codepush.zip'
         deploymentMethod: 'auto'
       displayName: 'Deploy Azure Web App'
@@ -136,7 +168,7 @@ stages:
     - task: AzureAppServiceSettings@1
       inputs:
         azureSubscription: 'Codepush SC'  # Your Azure RM service connection name
-        appName: '$(webAppName)-ap21'
+        appName: '$(webAppName)-$(projectSuffix)'
         resourceGroupName: '$(resourceGroupName)'
         appSettings: |
           [
