@@ -83,7 +83,7 @@ stages:
       inputs:
         azureSubscription: 'Codepush SC'  # Your Azure RM service connection name
         appType: 'webApp'
-        appName: '$(webAppName)'
+        appName: '$(webAppName)-ap21'
         package: '$(System.ArtifactsDirectory)/drop/$(webAppName).zip'
         deploymentMethod: 'auto'
       displayName: 'Deploy Azure Web App'
@@ -92,7 +92,7 @@ stages:
     - task: AzureAppServiceSettings@1
       inputs:
         azureSubscription: 'Codepush SC'  # Your Azure RM service connection name
-        appName: '$(webAppName)'
+        appName: '$(webAppName)-ap21'
         resourceGroupName: '$(resourceGroupName)'
         appSettings: |
           [
