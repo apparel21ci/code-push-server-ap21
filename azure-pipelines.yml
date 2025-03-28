@@ -35,12 +35,6 @@ stages:
         npm install
         npm run build
         
-        # Verify express module is installed
-        if [ ! -d "node_modules/express" ]; then
-          echo "Express module not found! Installing dependencies again..."
-          npm install express --save
-        fi
-        
         # Copy files to deployment directory
         mkdir -p $(Build.ArtifactStagingDirectory)/deploy
         cp -r bin $(Build.ArtifactStagingDirectory)/deploy/
@@ -54,39 +48,6 @@ stages:
         mkdir -p $(Build.ArtifactStagingDirectory)/deploy/certs
         openssl req -x509 -newkey rsa:4096 -keyout $(Build.ArtifactStagingDirectory)/deploy/certs/cert.key -out $(Build.ArtifactStagingDirectory)/deploy/certs/cert.crt -days 365 -nodes -subj "/CN=codepush-ap21.azurewebsites.net"
         
-        # Create a custom wrapper for package.json that ensures dependencies are installed
-        cat > $(Build.ArtifactStagingDirectory)/deploy/package.json << 'EOF'
-        {
-          "name": "code-push-server",
-          "version": "0.0.1",
-          "description": "Code Push Server for App deployment",
-          "main": "./bin/script/server.js",
-          "scripts": {
-            "start": "bash ./fix-dependencies.sh && node ./bin/script/server.js",
-            "test": "echo \"Error: no test specified\" && exit 1"
-          },
-          "dependencies": {
-            "express": "^4.17.1"
-          },
-          "engines": {
-            "node": ">=18.0.0"
-          }
-        }
-        EOF
-        
-        # Create fix-dependencies.sh to install missing dependencies
-        cat > $(Build.ArtifactStagingDirectory)/deploy/fix-dependencies.sh << 'EOF'
-        #!/bin/bash
-        echo "Checking for Express module..."
-        if [ ! -d "node_modules/express" ]; then
-          echo "Express module not found! Installing dependencies..."
-          npm install
-        else
-          echo "Express module found, continuing..."
-        fi
-        EOF
-        chmod +x $(Build.ArtifactStagingDirectory)/deploy/fix-dependencies.sh
-        
         # Verify dependencies in deployment directory
         if [ ! -d "$(Build.ArtifactStagingDirectory)/deploy/node_modules/express" ]; then
           echo "ERROR: Express module not found in deployment directory!"
@@ -95,55 +56,6 @@ stages:
           echo "Express module successfully included in deployment package."
         fi
       displayName: 'Build API Server and Copy Files'
-
-    # Create a deployment script with proper error handling
-    - script: |
-        echo "#!/bin/bash" > $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "cd /home/site/wwwroot" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "export PORT=8080" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "export NODE_ENV=production" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "# Check if node_modules exists and install dependencies if needed" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "if [ ! -d \"node_modules/express\" ]; then" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "  echo 'Express module not found! Installing dependencies...'" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "  npm install" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "fi" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "if [ ! -f /home/site/wwwroot/bin/script/server.js ]; then" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "  echo 'Error: server.js not found!'" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "  exit 1" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "fi" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        echo "node ./bin/script/server.js" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-        chmod +x $(Build.ArtifactStagingDirectory)/deploy/startup.sh
-      displayName: 'Create Startup Script'
-
-    # Create web.config for Azure with improved configuration
-    - script: |
-        echo '<?xml version="1.0" encoding="utf-8"?>' > $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '<configuration>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '  <system.webServer>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '    <webSocket enabled="false" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '    <handlers>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '      <add name="iisnode" path="bin/script/server.js" verb="*" modules="iisnode" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '    </handlers>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '    <rewrite>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '      <rules>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '        <rule name="NodeInspector" patternSyntax="ECMAScript" stopProcessing="true">' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '          <match url="^bin/script/server.js\/debug[\/]?" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '        </rule>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '        <rule name="StaticContent">' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '          <action type="Rewrite" url="public{REQUEST_URI}" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '        </rule>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '        <rule name="DynamicContent">' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '          <conditions>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '            <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="True" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '          </conditions>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '          <action type="Rewrite" url="bin/script/server.js" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '        </rule>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '      </rules>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '    </rewrite>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '    <iisnode node_env="production" nodeProcessCommandLine="node" watchedFiles="*.js;iisnode.yml" loggingEnabled="true" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '  </system.webServer>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-        echo '</configuration>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
-      displayName: 'Create Web.config'
 
     - task: ArchiveFiles@2
       inputs:
@@ -175,26 +87,6 @@ stages:
         artifactName: 'drop'
         downloadPath: '$(System.ArtifactsDirectory)'
       displayName: 'Download Artifacts'
-
-    # Debug step to verify artifact location and content
-    - script: |
-        echo "Listing downloaded artifacts directory:"
-        ls -la $(System.ArtifactsDirectory)/drop/
-        echo "Verifying zip file exists:"
-        if [ -f "$(System.ArtifactsDirectory)/drop/codepush.zip" ]; then
-          echo "✅ codepush.zip found at expected location"
-          echo "File size: $(du -h $(System.ArtifactsDirectory)/drop/codepush.zip | cut -f1)"
-        else
-          echo "❌ codepush.zip NOT found at expected location"
-          echo "Searching for zip files:"
-          find $(System.ArtifactsDirectory) -name "*.zip" -type f
-        fi
-      displayName: 'Debug Artifact Location'
-
-    # Use GitHub service connection for source code checkout
-    - checkout: self
-      displayName: 'Checkout Source Code'
-      persistCredentials: true
 
     # For Azure Web App deployment, use a separate Azure RM service connection
     - task: AzureWebApp@1
@@ -272,11 +164,6 @@ stages:
             {
               "name": "DISABLE_REDIS",
               "value": "true",
-              "slotSetting": false
-            },
-            {
-              "name": "WEBSITES_CONTAINER_START_TIME_LIMIT",
-              "value": "300",
               "slotSetting": false
             },
             {
