@@ -213,7 +213,7 @@ stages:
           # Create App Service Plan if needed
           if (-not $appServicePlanExists) {
             Write-Host "Creating Windows App Service Plan..."
-            az appservice plan create --name "$(webAppName)-plan" --resource-group "$(resourceGroupName)" --sku S1 --is-linux false
+            az appservice plan create --name "$(webAppName)-plan" --resource-group "$(resourceGroupName)" --sku S1 --location "$(azLocation)"
           } else {
             Write-Host "App Service Plan already exists."
           }
