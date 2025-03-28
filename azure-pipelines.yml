@@ -97,12 +97,12 @@ stages:
         # Write the updated package.json
         $pkgJson | ConvertTo-Json -Depth 10 | Set-Content -Path "$(Build.ArtifactStagingDirectory)/deploy/package.json"
         
-        # Create dependency checker
+        # Create dependency checker that runs on startup
         @"
         const fs = require('fs');
         const { execSync } = require('child_process');
 
-        console.log('Windows Node.js environment - Checking dependencies...');
+        console.log('Checking dependencies before startup...');
         console.log('Current directory:', process.cwd());
         
         try {
@@ -111,7 +111,7 @@ stages:
         } catch (e) {
           console.log('Express module not found, installing dependencies...');
           try {
-            console.log(execSync('npm install --production').toString());
+            console.log(execSync('npm install express --save').toString());
             console.log('Dependencies installed successfully');
           } catch (err) {
             console.error('Failed to install dependencies:', err);
@@ -119,6 +119,35 @@ stages:
           }
         }
         "@ | Set-Content -Path "$(Build.ArtifactStagingDirectory)/deploy/install-dependencies.js"
+        
+        # Create a startup.js file that runs before the main server
+        @"
+        console.log('Starting code-push-server with dependency check...');
+        
+        // First check if express exists
+        try {
+          require.resolve('express');
+          console.log('Express module found, continuing startup');
+        } catch (e) {
+          console.log('Express module not found, installing dependencies...');
+          const { execSync } = require('child_process');
+          try {
+            console.log(execSync('npm install express --save').toString());
+            console.log('Dependencies installed successfully');
+          } catch (err) {
+            console.error('Failed to install dependencies:', err);
+            process.exit(1);
+          }
+        }
+        
+        // Start the actual server
+        try {
+          require('./bin/script/server.js');
+        } catch (err) {
+          console.error('Error starting server:', err);
+          process.exit(1);
+        }
+        "@ | Set-Content -Path "$(Build.ArtifactStagingDirectory)/deploy/startup.js"
         
         # Create web.config
         @"
@@ -228,8 +257,13 @@ stages:
           if (-not $webAppExists) {
             Write-Host "Creating Windows Web App..."
             az webapp create --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --plan "$(webAppName)-plan" --runtime "NODE|18-lts"
+            
+            # Ensure it's configured as Windows
+            Write-Host "Ensuring Windows configuration..."
+            az webapp config set --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --windows-fx-version "NODE|18-lts"
           } else {
-            Write-Host "Web App already exists."
+            Write-Host "Web App already exists. Ensuring Windows configuration..."
+            az webapp config set --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --windows-fx-version "NODE|18-lts"
           }
       displayName: 'Ensure Windows App Service Exists'
 
@@ -287,6 +321,21 @@ stages:
               "slotSetting": false
             },
             {
+              "name": "WEBSITE_WEBDEPLOY_USE_SCM",
+              "value": "false",
+              "slotSetting": false
+            },
+            {
+              "name": "WEBSITE_LOAD_USER_PROFILE",
+              "value": "1",
+              "slotSetting": false
+            },
+            {
+              "name": "WEBSITES_PORT",
+              "value": "8080",
+              "slotSetting": false
+            },
+            {
               "name": "NODE_PENDING_PIPE_INSTANCES",
               "value": "25",
               "slotSetting": false
@@ -322,8 +371,8 @@ stages:
               "slotSetting": false
             },
             {
-              "name": "WEBSITES_WEBDEPLOY_USE_SCM",
-              "value": "false",
+              "name": "COMMAND",
+              "value": "node startup.js",
               "slotSetting": false
             }
           ]
