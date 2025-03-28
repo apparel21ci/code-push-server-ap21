@@ -1,13 +1,16 @@
 trigger:
   - main  # or your default branch
+
 pool:
   vmImage: 'ubuntu-latest'
+
 variables:
   # Update these values according to your setup
-  resourceGroupName: 'CodePushResourceGroup'
+  resourceGroupName: 'app-codepush-envimo-prod-ase'
   webAppName: 'codepush'  # Replace with your Web App name
   projectSuffix: 'ap21'   # Same as used in infrastructure deployment
-  azLocation: 'australiasoutheast'         # Your Azure region
+  azLocation: 'australiasoutheast'  # Your Azure region
+
 stages:
 - stage: Build
   displayName: 'Build Stage'
@@ -19,10 +22,12 @@ stages:
       inputs:
         versionSpec: '18.x'
       displayName: 'Install Node.js'
+
     - script: |
         npm install
         npm run build
       displayName: 'npm install and build'
+
     - task: CopyFiles@2
       inputs:
         SourceFolder: '$(System.DefaultWorkingDirectory)'
@@ -32,6 +37,7 @@ stages:
           !.git/**
         TargetFolder: '$(Build.ArtifactStagingDirectory)'
       displayName: 'Copy Files'
+
     - task: ArchiveFiles@2
       inputs:
         rootFolderOrFile: '$(Build.ArtifactStagingDirectory)'
@@ -40,12 +46,14 @@ stages:
         archiveFile: '$(Build.ArtifactStagingDirectory)/$(webAppName).zip'
         replaceExistingArchive: true
       displayName: 'Archive Files'
+
     - task: PublishBuildArtifacts@1
       inputs:
         PathtoPublish: '$(Build.ArtifactStagingDirectory)/$(webAppName).zip'
         ArtifactName: 'drop'
         publishLocation: 'Container'
       displayName: 'Publish Artifacts'
+
 - stage: Deploy
   displayName: 'Deploy Stage'
   dependsOn: Build
@@ -60,11 +68,68 @@ stages:
         artifactName: 'drop'
         downloadPath: '$(System.ArtifactsDirectory)'
       displayName: 'Download Artifacts'
+
+    # Use GitHub service connection for source code checkout
+    - checkout: self
+      displayName: 'Checkout Source Code'
+      persistCredentials: true
+
+    # For Azure Web App deployment, use a separate Azure RM service connection
+    # You need to create this in Azure DevOps Project Settings > Service Connections
     - task: AzureWebApp@1
       inputs:
-        azureSubscription: 'CodePushAzureConnection'  # Use the name of your service connection
+        azureSubscription: 'Codepush SC'  # REPLACE THIS with your Azure RM service connection name
         appType: 'webApp'
         appName: '$(webAppName)'
         package: '$(System.ArtifactsDirectory)/drop/$(webAppName).zip'
         deploymentMethod: 'auto'
       displayName: 'Deploy Azure Web App'
+
+    # Optional: Configure App Settings
+    - task: AzureAppServiceSettings@1
+      inputs:
+        azureSubscription: 'Codepush SC'  # REPLACE THIS with your Azure RM service connection name
+        appName: '$(webAppName)'
+        resourceGroupName: '$(resourceGroupName)'
+        appSettings: |
+          [
+            {
+              "name": "NODE_ENV",
+              "value": "production",
+              "slotSetting": false
+            },
+            {
+              "name": "STORAGE_ACCOUNT_NAME",
+              "value": "$(projectSuffix)storage",
+              "slotSetting": false
+            },
+            {
+              "name": "EMULATED",
+              "value": "false",
+              "slotSetting": false
+            },
+            {
+              "name": "HTTPS",
+              "value": "true",
+              "slotSetting": false
+            }
+          ]
+      displayName: 'Configure App Settings'
+
+    # Uncomment this if you need to deploy infrastructure
+    # - task: AzureCLI@2
+    #   inputs:
+    #     azureSubscription: 'YourAzureRMConnection'  # REPLACE THIS with your Azure RM service connection name
+    #     scriptType: 'bash'
+    #     scriptLocation: 'inlineScript'
+    #     inlineScript: |
+    #       az deployment group create \
+    #         --resource-group $(resourceGroupName) \
+    #         --template-file ./codepush-infrastructure.bicep \
+    #         --parameters project_suffix=$(projectSuffix) \
+    #         az_location=$(azLocation) \
+    #         github_client_id=$(GITHUB_CLIENT_ID) \
+    #         github_client_secret=$(GITHUB_CLIENT_SECRET) \
+    #         microsoft_client_id=$(MICROSOFT_CLIENT_ID) \
+    #         microsoft_client_secret=$(MICROSOFT_CLIENT_SECRET)
+    #   displayName: 'Deploy Azure Infrastructure'
