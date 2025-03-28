@@ -1,0 +1,70 @@
+trigger:
+  - main  # or your default branch
+pool:
+  vmImage: 'ubuntu-latest'
+variables:
+  # Update these values according to your setup
+  resourceGroupName: 'CodePushResourceGroup'
+  webAppName: 'codepush'  # Replace with your Web App name
+  projectSuffix: 'ap21'   # Same as used in infrastructure deployment
+  azLocation: 'australiasoutheast'         # Your Azure region
+stages:
+- stage: Build
+  displayName: 'Build Stage'
+  jobs:
+  - job: Build
+    displayName: 'Build Job'
+    steps:
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '18.x'
+      displayName: 'Install Node.js'
+    - script: |
+        npm install
+        npm run build
+      displayName: 'npm install and build'
+    - task: CopyFiles@2
+      inputs:
+        SourceFolder: '$(System.DefaultWorkingDirectory)'
+        Contents: |
+          **/*
+          !node_modules/**
+          !.git/**
+        TargetFolder: '$(Build.ArtifactStagingDirectory)'
+      displayName: 'Copy Files'
+    - task: ArchiveFiles@2
+      inputs:
+        rootFolderOrFile: '$(Build.ArtifactStagingDirectory)'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/$(webAppName).zip'
+        replaceExistingArchive: true
+      displayName: 'Archive Files'
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/$(webAppName).zip'
+        ArtifactName: 'drop'
+        publishLocation: 'Container'
+      displayName: 'Publish Artifacts'
+- stage: Deploy
+  displayName: 'Deploy Stage'
+  dependsOn: Build
+  jobs:
+  - job: Deploy
+    displayName: 'Deploy Job'
+    steps:
+    - task: DownloadBuildArtifacts@1
+      inputs:
+        buildType: 'current'
+        downloadType: 'single'
+        artifactName: 'drop'
+        downloadPath: '$(System.ArtifactsDirectory)'
+      displayName: 'Download Artifacts'
+    - task: AzureWebApp@1
+      inputs:
+        azureSubscription: 'CodePushAzureConnection'  # Use the name of your service connection
+        appType: 'webApp'
+        appName: '$(webAppName)'
+        package: '$(System.ArtifactsDirectory)/drop/$(webAppName).zip'
+        deploymentMethod: 'auto'
+      displayName: 'Deploy Azure Web App'
