@@ -266,20 +266,15 @@ stages:
           # Create web app if needed
           if (-not $webAppExists) {
             Write-Host "Creating Windows Web App..."
-            # First check available runtimes
-            Write-Host "Checking available Windows runtimes..."
-            $runtimes = az webapp list-runtimes --os-type windows --query "[?contains(name, 'NODE')]" -o tsv
-            Write-Host "Available Node.js runtimes: $runtimes"
-            
-            # Create with a known good runtime
+            # Create with a known good runtime for Windows
             az webapp create --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --plan "$(webAppName)-plan" --runtime "DOTNET|6.0"
             
-            # Then set the specific Node.js version
-            Write-Host "Setting Node.js runtime configuration..."
-            az webapp config set --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --node-version "18.20.0"
+            # Configure for Node.js
+            Write-Host "Configuring for Node.js..."
+            az webapp config appsettings set --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --settings WEBSITE_NODE_DEFAULT_VERSION=~18
           } else {
-            Write-Host "Web App already exists. Setting Node.js runtime configuration..."
-            az webapp config set --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --node-version "18.20.0"
+            Write-Host "Web App already exists. Configuring for Node.js..."
+            az webapp config appsettings set --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --settings WEBSITE_NODE_DEFAULT_VERSION=~18
           }
       displayName: 'Ensure Windows App Service Exists'
 
