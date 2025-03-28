@@ -10,6 +10,7 @@ variables:
   webAppName: 'codepush'  # Replace with your Web App name
   projectSuffix: 'ap21'   # Same as used in infrastructure deployment
   azLocation: 'australiasoutheast'  # Your Azure region
+  serverUrl: 'https://$(webAppName).azurewebsites.net'
 
 stages:
 - stage: Build
@@ -23,27 +24,71 @@ stages:
         versionSpec: '18.x'
       displayName: 'Install Node.js'
 
+    # Create a deployment directory
+    - script: |
+        mkdir -p $(Build.ArtifactStagingDirectory)/deploy
+      displayName: 'Create Deployment Directory'
+
+    # Build the API server
     - script: |
         cd api
         npm install
         npm run build
-      displayName: 'Build API Server'
+        mkdir -p $(Build.ArtifactStagingDirectory)/deploy
+        cp -r bin $(Build.ArtifactStagingDirectory)/deploy/
+        cp -r node_modules $(Build.ArtifactStagingDirectory)/deploy/
+        cp package.json $(Build.ArtifactStagingDirectory)/deploy/
+        cp .env.example $(Build.ArtifactStagingDirectory)/deploy/.env
+        cp codepush-infrastructure.bicep $(Build.ArtifactStagingDirectory)/deploy/
+      displayName: 'Build API Server and Copy Files'
 
-    - task: CopyFiles@2
-      inputs:
-        SourceFolder: '$(System.DefaultWorkingDirectory)/api'
-        Contents: |
-          bin/**
-          package.json
-          package-lock.json
-          .env.example
-          codepush-infrastructure.bicep
-        TargetFolder: '$(Build.ArtifactStagingDirectory)'
-      displayName: 'Copy API Files'
+    # Create a deployment script with proper error handling
+    - script: |
+        echo "#!/bin/bash" > $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "cd /home/site/wwwroot" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "export PORT=8080" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "export NODE_ENV=production" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "if [ ! -f /home/site/wwwroot/bin/script/server.js ]; then" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "  echo 'Error: server.js not found!'" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "  exit 1" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "fi" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        echo "node ./bin/script/server.js" >> $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+        chmod +x $(Build.ArtifactStagingDirectory)/deploy/startup.sh
+      displayName: 'Create Startup Script'
+
+    # Create web.config for Azure with improved configuration
+    - script: |
+        echo '<?xml version="1.0" encoding="utf-8"?>' > $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '<configuration>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '  <system.webServer>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '    <webSocket enabled="false" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '    <handlers>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '      <add name="iisnode" path="bin/script/server.js" verb="*" modules="iisnode" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '    </handlers>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '    <rewrite>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '      <rules>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '        <rule name="NodeInspector" patternSyntax="ECMAScript" stopProcessing="true">' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '          <match url="^bin/script/server.js\/debug[\/]?" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '        </rule>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '        <rule name="StaticContent">' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '          <action type="Rewrite" url="public{REQUEST_URI}" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '        </rule>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '        <rule name="DynamicContent">' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '          <conditions>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '            <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="True" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '          </conditions>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '          <action type="Rewrite" url="bin/script/server.js" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '        </rule>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '      </rules>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '    </rewrite>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '    <iisnode node_env="production" nodeProcessCommandLine="node" watchedFiles="*.js;iisnode.yml" loggingEnabled="true" />' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '  </system.webServer>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+        echo '</configuration>' >> $(Build.ArtifactStagingDirectory)/deploy/web.config
+      displayName: 'Create Web.config'
 
     - task: ArchiveFiles@2
       inputs:
-        rootFolderOrFile: '$(Build.ArtifactStagingDirectory)'
+        rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/deploy'
         includeRootFolder: false
         archiveType: 'zip'
         archiveFile: '$(Build.ArtifactStagingDirectory)/$(webAppName).zip'
@@ -78,13 +123,12 @@ stages:
       persistCredentials: true
 
     # For Azure Web App deployment, use a separate Azure RM service connection
-    # You need to create this in Azure DevOps Project Settings > Service Connections
     - task: AzureWebApp@1
       inputs:
         azureSubscription: 'Codepush SC'  # Your Azure RM service connection name
         appType: 'webApp'
         appName: '$(webAppName)-ap21'
-        package: '$(System.ArtifactsDirectory)/drop/$(webAppName).zip'
+        package: '$(System.ArtifactStagingDirectory)/drop/$(webAppName).zip'
         deploymentMethod: 'auto'
       displayName: 'Deploy Azure Web App'
 
@@ -114,6 +158,36 @@ stages:
             {
               "name": "HTTPS",
               "value": "true",
+              "slotSetting": false
+            },
+            {
+              "name": "WEBSITE_NODE_DEFAULT_VERSION",
+              "value": "18.20.7",
+              "slotSetting": false
+            },
+            {
+              "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
+              "value": "false",
+              "slotSetting": false
+            },
+            {
+              "name": "SERVER_URL",
+              "value": "$(serverUrl)",
+              "slotSetting": false
+            },
+            {
+              "name": "CORS_ORIGIN",
+              "value": "$(serverUrl)",
+              "slotSetting": false
+            },
+            {
+              "name": "LOGGING",
+              "value": "true",
+              "slotSetting": false
+            },
+            {
+              "name": "WEBSITE_RUN_FROM_PACKAGE",
+              "value": "0",
               "slotSetting": false
             }
           ]
