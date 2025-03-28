@@ -28,193 +28,192 @@ stages:
 
     # Create a deployment directory
     - script: |
-        mkdir -p $(Build.ArtifactStagingDirectory)/deploy
+        mkdir $(Build.ArtifactStagingDirectory)\deploy
       displayName: 'Create Deployment Directory'
 
     # Build the API server with improved dependency handling
     - script: |
         cd api
-        npm install
-        npm run build
+        call npm install
+        call npm run build
         
-        # Copy files to deployment directory
-        mkdir -p $(Build.ArtifactStagingDirectory)/deploy
-        cp -r bin $(Build.ArtifactStagingDirectory)/deploy/
-        cp -r node_modules $(Build.ArtifactStagingDirectory)/deploy/
-        cp package.json $(Build.ArtifactStagingDirectory)/deploy/
-        cp package-lock.json $(Build.ArtifactStagingDirectory)/deploy/ 2>/dev/null || :
-        cp .env.example $(Build.ArtifactStagingDirectory)/deploy/.env
-        cp codepush-infrastructure.bicep $(Build.ArtifactStagingDirectory)/deploy/ 2>/dev/null || :
+        :: Copy files to deployment directory
+        mkdir $(Build.ArtifactStagingDirectory)\deploy
+        xcopy /E /Y bin $(Build.ArtifactStagingDirectory)\deploy\bin\
+        xcopy /E /Y node_modules $(Build.ArtifactStagingDirectory)\deploy\node_modules\
+        copy package.json $(Build.ArtifactStagingDirectory)\deploy\
+        copy package-lock.json $(Build.ArtifactStagingDirectory)\deploy\ 2>nul
+        copy .env.example $(Build.ArtifactStagingDirectory)\deploy\.env
+        if exist codepush-infrastructure.bicep copy codepush-infrastructure.bicep $(Build.ArtifactStagingDirectory)\deploy\
         
-        # Modified package.json with custom start script
-        cat > $(Build.ArtifactStagingDirectory)/deploy/package.json << 'EOF'
-        {
-          "name": "code-push-server",
-          "version": "0.0.1",
-          "main": "./bin/script/server.js",
-          "scripts": {
-            "prestart": "node install-dependencies.js",
-            "start": "node ./bin/script/server.js"
-          },
-          "dependencies": {
-            "express": "^4.17.1",
-            "body-parser": "^1.19.0",
-            "cookie-parser": "^1.4.5",
-            "morgan": "^1.10.0",
-            "request": "^2.88.2"
-          },
-          "engines": {
-            "node": ">=18.0.0"
-          }
-        }
-        EOF
+        :: Modified package.json with custom start script
+        (
+        echo {
+        echo   "name": "code-push-server",
+        echo   "version": "0.0.1",
+        echo   "main": "./bin/script/server.js",
+        echo   "scripts": {
+        echo     "prestart": "node install-dependencies.js",
+        echo     "start": "node ./bin/script/server.js"
+        echo   },
+        echo   "dependencies": {
+        echo     "express": "^4.17.1",
+        echo     "body-parser": "^1.19.0",
+        echo     "cookie-parser": "^1.4.5",
+        echo     "morgan": "^1.10.0",
+        echo     "request": "^2.88.2"
+        echo   },
+        echo   "engines": {
+        echo     "node": ">=18.0.0"
+        echo   }
+        echo }
+        ) > $(Build.ArtifactStagingDirectory)\deploy\package.json
         
-        # Create dependency installer for Windows
-        cat > $(Build.ArtifactStagingDirectory)/deploy/install-dependencies.js << 'EOF'
-        const fs = require('fs');
-        const { execSync } = require('child_process');
-
-        console.log('Windows Node.js environment - Checking dependencies...');
-        console.log('Current directory:', process.cwd());
+        :: Create dependency installer for Windows
+        (
+        echo const fs = require('fs');
+        echo const { execSync } = require('child_process');
+        echo.
+        echo console.log('Windows Node.js environment - Checking dependencies...');
+        echo console.log('Current directory:', process.cwd());
+        echo.
+        echo try {
+        echo   require.resolve('express');
+        echo   console.log('Express module found, continuing startup');
+        echo } catch (e) {
+        echo   console.log('Express module not found, installing dependencies...');
+        echo   try {
+        echo     console.log(execSync('npm install --production').toString());
+        echo     console.log('Dependencies installed successfully');
+        echo   } catch (err) {
+        echo     console.error('Failed to install dependencies:', err);
+        echo     process.exit(1);
+        echo   }
+        echo }
+        ) > $(Build.ArtifactStagingDirectory)\deploy\install-dependencies.js
         
-        try {
-          require.resolve('express');
-          console.log('Express module found, continuing startup');
-        } catch (e) {
-          console.log('Express module not found, installing dependencies...');
-          try {
-            console.log(execSync('npm install --production').toString());
-            console.log('Dependencies installed successfully');
-          } catch (err) {
-            console.error('Failed to install dependencies:', err);
-            process.exit(1);
-          }
-        }
-        EOF
+        :: Create web.config for Windows IIS
+        (
+        echo ^<?xml version="1.0" encoding="utf-8"?^>
+        echo ^<configuration^>
+        echo   ^<system.webServer^>
+        echo     ^<webSocket enabled="false" /^>
+        echo     ^<handlers^>
+        echo       ^<add name="iisnode" path="bin\script\server.js" verb="*" modules="iisnode" /^>
+        echo     ^</handlers^>
+        echo     ^<rewrite^>
+        echo       ^<rules^>
+        echo         ^<rule name="NodeInspector" patternSyntax="ECMAScript" stopProcessing="true"^>
+        echo           ^<match url="^bin\script\server.js\/debug[\/]?" /^>
+        echo         ^</rule^>
+        echo         ^<rule name="StaticContent"^>
+        echo           ^<action type="Rewrite" url="public{REQUEST_URI}" /^>
+        echo         ^</rule^>
+        echo         ^<rule name="DynamicContent"^>
+        echo           ^<conditions^>
+        echo             ^<add input="{REQUEST_FILENAME}" matchType="IsFile" negate="True" /^>
+        echo           ^</conditions^>
+        echo           ^<action type="Rewrite" url="bin\script\server.js" /^>
+        echo         ^</rule^>
+        echo       ^</rules^>
+        echo     ^</rewrite^>
+        echo     ^<iisnode nodeProcessCommandLine="node.exe" watchedFiles="*.js;node_modules\*;bin\*" loggingEnabled="true" /^>
+        echo   ^</system.webServer^>
+        echo ^</configuration^>
+        ) > $(Build.ArtifactStagingDirectory)\deploy\web.config
         
-        # Create web.config for Windows IIS
-        cat > $(Build.ArtifactStagingDirectory)/deploy/web.config << 'EOF'
-        <?xml version="1.0" encoding="utf-8"?>
-        <configuration>
-          <system.webServer>
-            <webSocket enabled="false" />
-            <handlers>
-              <add name="iisnode" path="bin/script/server.js" verb="*" modules="iisnode" />
-            </handlers>
-            <rewrite>
-              <rules>
-                <rule name="NodeInspector" patternSyntax="ECMAScript" stopProcessing="true">
-                  <match url="^bin/script/server.js\/debug[\/]?" />
-                </rule>
-                <rule name="StaticContent">
-                  <action type="Rewrite" url="public{REQUEST_URI}" />
-                </rule>
-                <rule name="DynamicContent">
-                  <conditions>
-                    <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="True" />
-                  </conditions>
-                  <action type="Rewrite" url="bin/script/server.js" />
-                </rule>
-              </rules>
-            </rewrite>
-            <iisnode nodeProcessCommandLine="node.exe" watchedFiles="*.js;node_modules\*;bin\*" loggingEnabled="true" />
-          </system.webServer>
-        </configuration>
-        EOF
+        :: Create server startup wrapper
+        (
+        echo #!/usr/bin/env node
+        echo.
+        echo console.log('Starting code-push-server with dependency check...');
+        echo.
+        echo // First check if express exists
+        echo try {
+        echo   require.resolve('express');
+        echo   console.log('Express module found, continuing startup');
+        echo } catch (e) {
+        echo   console.log('Express module not found, installing dependencies...');
+        echo   const { execSync } = require('child_process');
+        echo   try {
+        echo     console.log(execSync('npm install --production').toString());
+        echo     console.log('Dependencies installed successfully');
+        echo   } catch (err) {
+        echo     console.error('Failed to install dependencies:', err);
+        echo     process.exit(1);
+        echo   }
+        echo }
+        echo.
+        echo // Start the actual server
+        echo try {
+        echo   require('./bin/script/server.js');
+        echo } catch (err) {
+        echo   console.error('Error starting server:', err);
+        echo   process.exit(1);
+        echo }
+        ) > $(Build.ArtifactStagingDirectory)\deploy\server.js
         
-        # Create server startup wrapper
-        cat > $(Build.ArtifactStagingDirectory)/deploy/server.js << 'EOF'
-        #!/usr/bin/env node
-        
-        console.log('Starting code-push-server with dependency check...');
-        
-        // First check if express exists
-        try {
-          require.resolve('express');
-          console.log('Express module found, continuing startup');
-        } catch (e) {
-          console.log('Express module not found, installing dependencies...');
-          const { execSync } = require('child_process');
-          try {
-            console.log(execSync('npm install --production').toString());
-            console.log('Dependencies installed successfully');
-          } catch (err) {
-            console.error('Failed to install dependencies:', err);
-            process.exit(1);
-          }
-        }
-        
-        // Start the actual server
-        try {
-          require('./bin/script/server.js');
-        } catch (err) {
-          console.error('Error starting server:', err);
-          process.exit(1);
-        }
-        EOF
-        
-        # Create fix-dependencies.sh script
-        cat > $(Build.ArtifactStagingDirectory)/deploy/fix-dependencies.sh << 'EOF'
-        #!/bin/bash
+        :: Create fix-dependencies.sh script
+        (
+        echo #!/bin/bash
         echo "----------------------------------------------------"
         echo "CodePush Server: Checking dependencies before startup"
         echo "----------------------------------------------------"
         echo "Current directory: $(pwd)"
         echo "Directory contents:"
-        ls -la
-        
+        echo "ls -la"
+        echo.
         echo "Checking for Express module..."
-        if [ ! -d "node_modules/express" ]; then
-          echo "EXPRESS MODULE NOT FOUND! Installing dependencies..."
-          npm install express --save
-          if [ ! -d "node_modules/express" ]; then
-            echo "Express still not found after npm install. Trying again with full dependencies..."
-            npm install
-            if [ ! -d "node_modules/express" ]; then
-              echo "CRITICAL: Express module still missing after multiple install attempts"
-              echo "Creating node_modules directory and installing express directly"
-              mkdir -p node_modules
-              cd node_modules
-              # Install express manually
-              npm install express@4.17.1 --no-save
-              cd ..
-            fi
-          fi
-        else
-          echo "Express module found, continuing..."
-        fi
+        echo "if [ ! -d "node_modules/express" ]; then"
+        echo "  echo "EXPRESS MODULE NOT FOUND! Installing dependencies...""
+        echo "  npm install express --save"
+        echo "  if [ ! -d "node_modules/express" ]; then"
+        echo "    echo "Express still not found after npm install. Trying again with full dependencies...""
+        echo "    npm install"
+        echo "    if [ ! -d "node_modules/express" ]; then"
+        echo "      echo "CRITICAL: Express module still missing after multiple install attempts""
+        echo "      echo "Creating node_modules directory and installing express directly""
+        echo "      mkdir -p node_modules"
+        echo "      cd node_modules"
+        echo "      # Install express manually"
+        echo "      npm install express@4.17.1 --no-save"
+        echo "      cd .."
+        echo "    fi"
+        echo "  fi"
+        echo "else"
+        echo "  echo "Express module found, continuing...""
+        echo "fi"
         echo "----------------------------------------------------"
         echo "Environment variables:"
-        env | sort
+        echo "env | sort"
         echo "----------------------------------------------------"
-        EOF
-        chmod +x $(Build.ArtifactStagingDirectory)/deploy/fix-dependencies.sh
+        ) > $(Build.ArtifactStagingDirectory)\deploy\fix-dependencies.sh
         
-        # Generate SSL certificates for HTTPS
-        mkdir -p $(Build.ArtifactStagingDirectory)/deploy/certs
-        openssl req -x509 -newkey rsa:4096 -keyout $(Build.ArtifactStagingDirectory)/deploy/certs/cert.key -out $(Build.ArtifactStagingDirectory)/deploy/certs/cert.crt -days 365 -nodes -subj "/CN=codepush-ap21.azurewebsites.net"
+        :: Generate SSL certificates for HTTPS
+        mkdir $(Build.ArtifactStagingDirectory)\deploy\certs
+        openssl req -x509 -newkey rsa:4096 -keyout $(Build.ArtifactStagingDirectory)\deploy\certs\cert.key -out $(Build.ArtifactStagingDirectory)\deploy\certs\cert.crt -days 365 -nodes -subj "/CN=codepush-ap21.azurewebsites.net"
         
-        # Verify dependencies in deployment directory
-        if [ ! -d "$(Build.ArtifactStagingDirectory)/deploy/node_modules/express" ]; then
-          echo "ERROR: Express module not found in deployment directory!"
+        :: Verify dependencies in deployment directory
+        if not exist "$(Build.ArtifactStagingDirectory)\deploy\node_modules\express" (
+          echo ERROR: Express module not found in deployment directory!
           exit 1
-        else
-          echo "Express module successfully included in deployment package."
-        fi
+        ) else (
+          echo Express module successfully included in deployment package.
+        )
       displayName: 'Build API Server and Copy Files'
 
     - task: ArchiveFiles@2
       inputs:
-        rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/deploy'
+        rootFolderOrFile: '$(Build.ArtifactStagingDirectory)\deploy'
         includeRootFolder: false
         archiveType: 'zip'
-        archiveFile: '$(Build.ArtifactStagingDirectory)/$(webAppName).zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)\$(webAppName).zip'
         replaceExistingArchive: true
       displayName: 'Archive Files'
 
     - task: PublishBuildArtifacts@1
       inputs:
-        PathtoPublish: '$(Build.ArtifactStagingDirectory)/$(webAppName).zip'
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)\$(webAppName).zip'
         ArtifactName: 'drop'
         publishLocation: 'Container'
       displayName: 'Publish Artifacts'
