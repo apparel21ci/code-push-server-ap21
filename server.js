@@ -77,7 +77,7 @@ if (!fs.existsSync(path.join(semverFunctionsPath, 'valid.js'))) {
 
 // Start the main server script
 try {
-  require('./bin/script/server');
+  require('./api/script/server');
 } catch (error) {
   console.error('Error starting server:', error);
   // Log more details about the error
