@@ -46,7 +46,15 @@ stages:
         
         # Install all required dependencies explicitly to ensure they're included
         cd $(Build.ArtifactStagingDirectory)/deploy
-        npm install --no-save express semver body-parser cookie-parser morgan request stream-to-array @azure/data-tables @azure/identity @azure/keyvault-secrets @azure/storage-blob @azure/storage-queue applicationinsights cookie-session ejs email-validator express-domain-middleware express-rate-limit multer node-deepcopy passport passport-azure-ad passport-github2 passport-http-bearer passport-windowslive q redis sanitize-html shortid streamifier superagent try-json yauzl yazl
+        
+        # First, clean any potentially corrupted semver installation
+        rm -rf node_modules/semver
+        
+        # Install a specific version of semver known to work correctly
+        npm install --no-save semver@7.3.8
+        
+        # Install other dependencies
+        npm install --no-save express body-parser cookie-parser morgan request stream-to-array @azure/data-tables @azure/identity @azure/keyvault-secrets @azure/storage-blob @azure/storage-queue applicationinsights cookie-session ejs email-validator express-domain-middleware express-rate-limit multer node-deepcopy passport passport-azure-ad passport-github2 passport-http-bearer passport-windowslive q redis sanitize-html shortid streamifier superagent try-json yauzl yazl
         
         # Create simplified server.js entry point with dependency check
         cat > $(Build.ArtifactStagingDirectory)/deploy/server.js << 'EOF'
@@ -325,7 +333,7 @@ stages:
             LOGGING=true \
             REDIS_HOST=none \
             DISABLE_REDIS=true \
-            SCM_DO_BUILD_DURING_DEPLOYMENT=false \
+            SCM_DO_BUILD_DURING_DEPLOYMENT=true \
             WEBSITE_NODE_DEFAULT_VERSION=~18 \
             WEBSITE_RUN_FROM_PACKAGE=0
           
