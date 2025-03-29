@@ -43,6 +43,15 @@ stages:
         cp api/package.json $(Build.ArtifactStagingDirectory)/deploy/
         cp api/package-lock.json $(Build.ArtifactStagingDirectory)/deploy/
         cp api/.env.example $(Build.ArtifactStagingDirectory)/deploy/.env
+        cp server.js $(Build.ArtifactStagingDirectory)/deploy/
+        
+        # Verify server.js was copied correctly
+        if [ ! -f "$(Build.ArtifactStagingDirectory)/deploy/server.js" ]; then
+          echo "ERROR: server.js was not copied to the deployment package!"
+          exit 1
+        else
+          echo "server.js successfully copied to deployment package"
+        fi
         
         # Install all required dependencies explicitly to ensure they're included
         cd $(Build.ArtifactStagingDirectory)/deploy
