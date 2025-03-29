@@ -2,7 +2,7 @@ trigger:
   - main
 
 pool:
-  vmImage: 'windows-2022'
+  vmImage: 'ubuntu-22.04'  # Use ubuntu-22.04 for better tool compatibility
 
 variables:
   resourceGroupName: 'app-codepush-envimo-prod-ase'
@@ -26,113 +26,52 @@ stages:
     # Build the API server
     - script: |
         cd api
-        call npm install
-        call npm run build
-      displayName: 'Build API Server'
+        npm install
+        # Ensure specific dependencies are installed
+        npm install --no-save express semver body-parser cookie-parser morgan request stream-to-array
+        npm run build
+      displayName: 'Install dependencies and build'
 
-    # Create and populate deployment directory
-    - task: CopyFiles@2
-      inputs:
-        SourceFolder: 'api'
-        Contents: |
-          bin/**
-          node_modules/**
-          package.json
-          package-lock.json
-          .env.example
-        TargetFolder: '$(Build.ArtifactStagingDirectory)/deploy'
-        CleanTargetFolder: true
-        OverWrite: true
-      displayName: 'Copy API Files to Deployment Directory'
-
-    # Rename .env.example to .env
-    - script: |
-        rename "$(Build.ArtifactStagingDirectory)\deploy\.env.example" ".env"
-      displayName: 'Setup Environment File'
-
-    # Create supporting files
-    - task: CopyFiles@2
-      inputs:
-        SourceFolder: '$(System.DefaultWorkingDirectory)/api'
-        Contents: |
-          package.json
-        TargetFolder: '$(Build.BinariesDirectory)/temp'
-        flattenFolders: true
-      displayName: 'Copy package.json for modification'
-
-    # Write necessary deployment files
-    - powershell: |
-        # Create enhanced package.json
-        $pkgJson = Get-Content -Raw -Path "$(Build.BinariesDirectory)/temp/package.json" | ConvertFrom-Json
+    # Create deployment package
+    - bash: |
+        # Create deployment directory
+        mkdir -p $(Build.ArtifactStagingDirectory)/deploy
         
-        # Ensure scripts property exists
-        if (-not $pkgJson.PSObject.Properties.Name -contains "scripts") {
-            $pkgJson | Add-Member -MemberType NoteProperty -Name "scripts" -Value @{}
-        }
+        # Copy required files
+        cp -r api/bin $(Build.ArtifactStagingDirectory)/deploy/
+        cp -r api/node_modules $(Build.ArtifactStagingDirectory)/deploy/
+        cp api/package.json $(Build.ArtifactStagingDirectory)/deploy/
+        cp api/package-lock.json $(Build.ArtifactStagingDirectory)/deploy/
+        cp api/.env.example $(Build.ArtifactStagingDirectory)/deploy/.env
         
-        # Add or update scripts
-        $pkgJson.scripts | Add-Member -MemberType NoteProperty -Name "prestart" -Value "node install-dependencies.js" -Force
-        $pkgJson.scripts | Add-Member -MemberType NoteProperty -Name "start" -Value "node ./bin/script/server.js" -Force
+        # Install additional dependencies that might be missing
+        cd $(Build.ArtifactStagingDirectory)/deploy
+        npm install --no-save semver
         
-        # Add or update dependencies
-        if (-not $pkgJson.PSObject.Properties.Name -contains "dependencies") {
-            $pkgJson | Add-Member -MemberType NoteProperty -Name "dependencies" -Value @{}
-        }
+        # Create simplified server.js entry point with dependency check
+        cat > $(Build.ArtifactStagingDirectory)/deploy/server.js << 'EOF'
+        console.log('Starting code-push-server...');
         
-        $dependencies = @{
-          "express" = "^4.17.1"
-          "body-parser" = "^1.19.0"
-          "cookie-parser" = "^1.4.5"
-          "morgan" = "^1.10.0" 
-          "request" = "^2.88.2"
-        }
+        // Check for critical dependencies
+        const missingDeps = [];
+        const requiredDeps = ['express', 'semver', 'body-parser', 'cookie-parser', 'morgan', 'request'];
         
-        foreach ($key in $dependencies.Keys) {
-            $pkgJson.dependencies | Add-Member -MemberType NoteProperty -Name $key -Value $dependencies[$key] -Force
-        }
-        
-        # Add engines
-        $pkgJson | Add-Member -MemberType NoteProperty -Name "engines" -Value @{ "node" = ">=18.0.0" } -Force
-        
-        # Write the updated package.json
-        $pkgJson | ConvertTo-Json -Depth 10 | Set-Content -Path "$(Build.ArtifactStagingDirectory)/deploy/package.json"
-        
-        # Create dependency checker that runs on startup
-        @"
-        const fs = require('fs');
-        const { execSync } = require('child_process');
-
-        console.log('Checking dependencies before startup...');
-        console.log('Current directory:', process.cwd());
-        
-        try {
-          require.resolve('express');
-          console.log('Express module found, continuing startup');
-        } catch (e) {
-          console.log('Express module not found, installing dependencies...');
+        for (const dep of requiredDeps) {
           try {
-            console.log(execSync('npm install express --save').toString());
-            console.log('Dependencies installed successfully');
-          } catch (err) {
-            console.error('Failed to install dependencies:', err);
-            process.exit(1);
+            require.resolve(dep);
+            console.log(`${dep} module found`);
+          } catch (e) {
+            console.log(`${dep} module missing`);
+            missingDeps.push(dep);
           }
         }
-        "@ | Set-Content -Path "$(Build.ArtifactStagingDirectory)/deploy/install-dependencies.js"
         
-        # Create a startup.js file that runs before the main server
-        @"
-        console.log('Starting code-push-server with dependency check...');
-        
-        // First check if express exists
-        try {
-          require.resolve('express');
-          console.log('Express module found, continuing startup');
-        } catch (e) {
-          console.log('Express module not found, installing dependencies...');
+        // Install missing dependencies if any
+        if (missingDeps.length > 0) {
+          console.log(`Installing missing dependencies: ${missingDeps.join(', ')}`);
           const { execSync } = require('child_process');
           try {
-            console.log(execSync('npm install express --save').toString());
+            execSync(`npm install --no-save ${missingDeps.join(' ')}`, { stdio: 'inherit' });
             console.log('Dependencies installed successfully');
           } catch (err) {
             console.error('Failed to install dependencies:', err);
@@ -140,29 +79,59 @@ stages:
           }
         }
         
-        // Start the actual server
         try {
+          // Start the actual server
           require('./bin/script/server.js');
         } catch (err) {
           console.error('Error starting server:', err);
           process.exit(1);
         }
-        "@ | Set-Content -Path "$(Build.ArtifactStagingDirectory)/deploy/startup.js"
+        EOF
         
-        # Create web.config
-        @"
+        # Verify express and semver are present
+        if [ ! -d "$(Build.ArtifactStagingDirectory)/deploy/node_modules/express" ] || [ ! -d "$(Build.ArtifactStagingDirectory)/deploy/node_modules/semver" ]; then
+          echo "Required modules not found in deployment directory!"
+          exit 1
+        else
+          echo "Required modules successfully included in deployment package."
+        fi
+        
+        # Create a simple package.json with proper start script and all dependencies
+        cat > $(Build.ArtifactStagingDirectory)/deploy/package.json << EOF
+        {
+          "name": "code-push-server",
+          "version": "1.0.0",
+          "description": "Code Push Server",
+          "main": "server.js",
+          "scripts": {
+            "start": "node server.js"
+          },
+          "engines": {
+            "node": ">=18.0.0"
+          },
+          "dependencies": {
+            "express": "^4.17.1",
+            "body-parser": "^1.19.0",
+            "cookie-parser": "^1.4.5",
+            "morgan": "^1.10.0",
+            "request": "^2.88.2",
+            "semver": "^7.5.4",
+            "stream-to-array": "^2.3.0"
+          }
+        }
+        EOF
+        
+        # Create web.config for Azure
+        cat > $(Build.ArtifactStagingDirectory)/deploy/web.config << 'EOF'
         <?xml version="1.0" encoding="utf-8"?>
         <configuration>
           <system.webServer>
             <webSocket enabled="false" />
             <handlers>
-              <add name="iisnode" path="startup.js" verb="*" modules="iisnode" />
+              <add name="iisnode" path="server.js" verb="*" modules="iisnode" />
             </handlers>
             <rewrite>
               <rules>
-                <rule name="NodeInspector" patternSyntax="ECMAScript" stopProcessing="true">
-                  <match url="^startup.js\/debug[\/]?" />
-                </rule>
                 <rule name="StaticContent">
                   <action type="Rewrite" url="public{REQUEST_URI}" />
                 </rule>
@@ -170,29 +139,21 @@ stages:
                   <conditions>
                     <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="True" />
                   </conditions>
-                  <action type="Rewrite" url="startup.js" />
+                  <action type="Rewrite" url="server.js" />
                 </rule>
               </rules>
             </rewrite>
-            <iisnode nodeProcessCommandLine="node.exe" watchedFiles="*.js;node_modules\*;bin\*" loggingEnabled="true" />
+            <iisnode nodeProcessCommandLine="node" watchedFiles="*.js;node_modules\*;bin\*" loggingEnabled="true" />
           </system.webServer>
         </configuration>
-        "@ | Set-Content -Path "$(Build.ArtifactStagingDirectory)/deploy/web.config"
+        EOF
         
-        # Verify express is present
-        if (-not (Test-Path "$(Build.ArtifactStagingDirectory)/deploy/node_modules/express")) {
-          Write-Error "EXPRESS MODULE NOT FOUND in deployment directory!"
-          exit 1
-        } else {
-          Write-Host "Express module successfully included in deployment package."
-        }
-      displayName: 'Create Deployment Supporting Files'
-      
-    # Generate SSL certificates
-    - script: |
-        mkdir $(Build.ArtifactStagingDirectory)\deploy\certs
-        openssl req -x509 -newkey rsa:4096 -keyout $(Build.ArtifactStagingDirectory)\deploy\certs\cert.key -out $(Build.ArtifactStagingDirectory)\deploy\certs\cert.crt -days 365 -nodes -subj "/CN=codepush-ap21.azurewebsites.net"
-      displayName: 'Generate SSL Certificates'
+        # Create .deployment file to disable build
+        cat > $(Build.ArtifactStagingDirectory)/deploy/.deployment << 'EOF'
+        [config]
+        SCM_DO_BUILD_DURING_DEPLOYMENT=false
+        EOF
+      displayName: 'Create Deployment Package'
 
     # Archive for deployment
     - task: ArchiveFiles@2
@@ -226,165 +187,113 @@ stages:
         downloadPath: '$(System.ArtifactsDirectory)'
       displayName: 'Download Artifacts'
 
-    # Ensure Windows App Service exists
+    # Prepare for App Service creation
     - task: AzureCLI@2
       inputs:
         azureSubscription: 'Codepush SC'
-        scriptType: 'ps'
+        scriptType: 'bash'
         scriptLocation: 'inlineScript'
         inlineScript: |
-          # Check if the app service plan exists
-          $appServicePlanExists = $null
-          try {
-            $appServicePlanExists = az appservice plan show --name "$(webAppName)-plan" --resource-group "$(resourceGroupName)" --query "name" --output tsv
-          } catch {}
+          # Verify resource group exists
+          echo "Verifying resource group exists..."
+          resourceGroupName="$(resourceGroupName)"
+          resourceGroupExists=$(az group show --name "$resourceGroupName" --query "name" --output tsv 2>/dev/null || echo "")
+          if [ -z "$resourceGroupExists" ]; then
+            echo "Resource group '$resourceGroupName' does not exist. Creating it..."
+            az group create --name "$resourceGroupName" --location "$(azLocation)"
+          else
+            echo "Resource group '$resourceGroupName' exists."
+          fi
           
-          # Create App Service Plan if needed
-          if (-not $appServicePlanExists) {
-            Write-Host "Creating Windows App Service Plan..."
-            az appservice plan create --name "$(webAppName)-plan" --resource-group "$(resourceGroupName)" --sku S1 --location "$(azLocation)"
-          } else {
-            Write-Host "App Service Plan already exists."
-          }
+          # List all app service plans in the subscription to debug
+          echo "Listing all App Service Plans in the subscription:"
+          az appservice plan list --query "[].{name:name, resourceGroup:resourceGroup, id:id}" -o table
           
-          # Check if the web app exists and if it's Linux
-          $webAppExists = $null
-          $isLinux = $false
-          try {
-            $webAppInfo = az webapp show --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --query "{name:name, reserved:reserved}" | ConvertFrom-Json
-            $webAppExists = $webAppInfo.name
-            $isLinux = $webAppInfo.reserved
-          } catch {}
+          # Delete existing web app if it exists
+          webAppName="$(webAppName)-$(projectSuffix)"
+          echo "Checking if Web App '$webAppName' exists in resource group '$resourceGroupName'..."
+          webAppExists=$(az webapp list --resource-group "$resourceGroupName" --query "[?name=='$webAppName'].name" --output tsv 2>/dev/null || echo "")
           
-          # If it exists and is Linux, delete it
-          if ($webAppExists -and $isLinux) {
-            Write-Host "Existing app is Linux-based. Deleting to recreate as Windows..."
-            az webapp delete --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)"
-            $webAppExists = $null
-          }
+          if [ -n "$webAppExists" ]; then
+            echo "Deleting existing web app '$webAppName' to ensure clean deployment..."
+            az webapp delete --name "$webAppName" --resource-group "$resourceGroupName"
+            # Wait for deletion to complete
+            sleep 15
+          fi
           
-          # Create web app if needed
-          if (-not $webAppExists) {
-            Write-Host "Creating Windows Web App..."
-            # Create Windows web app without specifying runtime
-            az webapp create --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --plan "$(webAppName)-plan" --os-type Windows
-            
-            # Configure for Node.js
-            Write-Host "Configuring for Node.js..."
-            az webapp config appsettings set --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --settings WEBSITE_NODE_DEFAULT_VERSION=~18
-          } else {
-            Write-Host "Web App already exists. Configuring for Node.js..."
-            az webapp config appsettings set --name "$(webAppName)-$(projectSuffix)" --resource-group "$(resourceGroupName)" --settings WEBSITE_NODE_DEFAULT_VERSION=~18
-          }
-      displayName: 'Ensure Windows App Service Exists'
+          # Create or ensure App Service Plan exists
+          appServicePlanName="$(webAppName)-plan-linux"
+          echo "Checking if App Service Plan '$appServicePlanName' exists..."
+          appServicePlanExists=$(az appservice plan list --resource-group "$resourceGroupName" --query "[?name=='$appServicePlanName'].name" --output tsv 2>/dev/null || echo "")
+          
+          if [ -z "$appServicePlanExists" ]; then
+            echo "Creating App Service Plan '$appServicePlanName'..."
+            az appservice plan create --name "$appServicePlanName" --resource-group "$resourceGroupName" --is-linux --sku S1 --location "$(azLocation)"
+          else
+            echo "App Service Plan '$appServicePlanName' already exists."
+          fi
+          
+          # Create the web app
+          echo "Creating Web App '$webAppName'..."
+          az webapp create --name "$webAppName" --resource-group "$resourceGroupName" --plan "$appServicePlanName" --runtime "NODE:18-lts"
+          
+          # Configure app settings
+          echo "Configuring app settings..."
+          az webapp config appsettings set --name "$webAppName" --resource-group "$resourceGroupName" --settings \
+            NODE_ENV=production \
+            STORAGE_ACCOUNT_NAME="$(projectSuffix)storage" \
+            EMULATED=false \
+            HTTPS=false \
+            WEBSITES_PORT=8080 \
+            SERVER_URL="$(serverUrl)" \
+            CORS_ORIGIN="$(serverUrl)" \
+            LOGGING=true \
+            REDIS_HOST=none \
+            DISABLE_REDIS=true \
+            SCM_DO_BUILD_DURING_DEPLOYMENT=false \
+            WEBSITE_NODE_DEFAULT_VERSION=~18 \
+            WEBSITE_RUN_FROM_PACKAGE=0
+          
+          # Set startup command
+          echo "Setting startup command..."
+          az webapp config set --name "$webAppName" --resource-group "$resourceGroupName" --startup-file "node server.js"
+      displayName: 'Create and Configure Azure Web App'
 
-    # Deploy to Azure Web App
-    - task: AzureWebApp@1
+    # Deploy to the web app
+    - task: AzureRmWebAppDeployment@4
+      inputs:
+        ConnectionType: 'AzureRM'
+        azureSubscription: 'Codepush SC'
+        appType: 'webAppLinux'
+        WebAppName: '$(webAppName)-$(projectSuffix)'
+        packageForLinux: '$(System.ArtifactsDirectory)/drop/codepush.zip'
+        RuntimeStack: 'NODE|18-lts'
+        StartupCommand: 'node server.js'
+        DeploymentType: 'zipDeploy'
+      displayName: 'Deploy to Azure Web App'
+
+    # Verify deployment
+    - task: AzureCLI@2
       inputs:
         azureSubscription: 'Codepush SC'
-        appType: 'webApp'
-        appName: '$(webAppName)-$(projectSuffix)'
-        package: '$(System.ArtifactsDirectory)/drop/codepush.zip'
-        deploymentMethod: 'auto'
-      displayName: 'Deploy Azure Web App'
-
-    # Configure App Settings
-    - task: AzureAppServiceSettings@1
-      inputs:
-        azureSubscription: 'Codepush SC'
-        appName: '$(webAppName)-$(projectSuffix)'
-        resourceGroupName: '$(resourceGroupName)'
-        appSettings: |
-          [
-            {
-              "name": "NODE_ENV",
-              "value": "production",
-              "slotSetting": false
-            },
-            {
-              "name": "STORAGE_ACCOUNT_NAME",
-              "value": "$(projectSuffix)storage",
-              "slotSetting": false
-            },
-            {
-              "name": "EMULATED",
-              "value": "false",
-              "slotSetting": false
-            },
-            {
-              "name": "HTTPS",
-              "value": "true",
-              "slotSetting": false
-            },
-            {
-              "name": "WEBSITE_NODE_DEFAULT_VERSION",
-              "value": "18.20.7",
-              "slotSetting": false
-            },
-            {
-              "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
-              "value": "true",
-              "slotSetting": false
-            },
-            {
-              "name": "WEBSITE_RUN_FROM_PACKAGE",
-              "value": "0", 
-              "slotSetting": false
-            },
-            {
-              "name": "WEBSITE_WEBDEPLOY_USE_SCM",
-              "value": "false",
-              "slotSetting": false
-            },
-            {
-              "name": "WEBSITE_LOAD_USER_PROFILE",
-              "value": "1",
-              "slotSetting": false
-            },
-            {
-              "name": "WEBSITES_PORT",
-              "value": "8080",
-              "slotSetting": false
-            },
-            {
-              "name": "NODE_PENDING_PIPE_INSTANCES",
-              "value": "25",
-              "slotSetting": false
-            },
-            {
-              "name": "WEBSITE_OVERRIDE_NODE_DEFAULT_VERSION",
-              "value": "18.20.7",
-              "slotSetting": false
-            },
-            {
-              "name": "SERVER_URL",
-              "value": "$(serverUrl)",
-              "slotSetting": false
-            },
-            {
-              "name": "CORS_ORIGIN",
-              "value": "$(serverUrl)",
-              "slotSetting": false
-            },
-            {
-              "name": "LOGGING",
-              "value": "true",
-              "slotSetting": false
-            },
-            {
-              "name": "REDIS_HOST",
-              "value": "none",
-              "slotSetting": false
-            },
-            {
-              "name": "DISABLE_REDIS",
-              "value": "true",
-              "slotSetting": false
-            },
-            {
-              "name": "COMMAND",
-              "value": "node startup.js",
-              "slotSetting": false
-            }
-          ]
-      displayName: 'Configure App Settings'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          webAppName="$(webAppName)-$(projectSuffix)"
+          resourceGroupName="$(resourceGroupName)"
+          
+          echo "Verifying deployment..."
+          status=$(az webapp show --name "$webAppName" --resource-group "$resourceGroupName" --query "state" -o tsv 2>/dev/null || echo "Not found")
+          echo "Web app status: $status"
+          
+          if [ "$status" = "Not found" ]; then
+            echo "Web app was not created successfully."
+            exit 1
+          fi
+          
+          echo "App Service URL: $(serverUrl)"
+          
+          # Restart the web app to ensure all settings are applied
+          echo "Restarting web app to apply all settings..."
+          az webapp restart --name "$webAppName" --resource-group "$resourceGroupName"
+      displayName: 'Verify Deployment'
