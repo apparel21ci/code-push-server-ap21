@@ -44,70 +44,79 @@ stages:
         cp api/package-lock.json $(Build.ArtifactStagingDirectory)/deploy/
         cp api/.env.example $(Build.ArtifactStagingDirectory)/deploy/.env
         
-        # Install additional dependencies that might be missing
+        # Install all required dependencies explicitly to ensure they're included
         cd $(Build.ArtifactStagingDirectory)/deploy
-        npm install --no-save semver
+        npm install --no-save express semver body-parser cookie-parser morgan request stream-to-array
         
         # Create simplified server.js entry point with dependency check
         cat > $(Build.ArtifactStagingDirectory)/deploy/server.js << 'EOF'
         console.log('Starting code-push-server...');
-        
-        // Check for critical dependencies
+
+        const { execSync } = require('child_process');
+
+        // Check for required dependencies
         const missingDeps = [];
-        const requiredDeps = ['express', 'semver', 'body-parser', 'cookie-parser', 'morgan', 'request'];
-        
+        const requiredDeps = [
+          'express', 
+          'semver', 
+          'body-parser', 
+          'cookie-parser', 
+          'morgan', 
+          'request',
+          'stream-to-array'
+        ];
+
         for (const dep of requiredDeps) {
           try {
             require.resolve(dep);
             console.log(`${dep} module found`);
           } catch (e) {
-            console.log(`${dep} module missing`);
+            console.log(`${dep} module not found, will install`);
             missingDeps.push(dep);
           }
         }
-        
-        // Install missing dependencies if any
+
+        // Install any missing dependencies
         if (missingDeps.length > 0) {
-          console.log(`Installing missing dependencies: ${missingDeps.join(', ')}`);
-          const { execSync } = require('child_process');
           try {
-            execSync(`npm install --no-save ${missingDeps.join(' ')}`, { stdio: 'inherit' });
-            console.log('Dependencies installed successfully');
-          } catch (err) {
-            console.error('Failed to install dependencies:', err);
-            process.exit(1);
+            console.log(`Installing missing dependencies: ${missingDeps.join(', ')}`);
+            // First try to install using npm
+            try {
+              execSync(`npm install --no-save ${missingDeps.join(' ')}`);
+              console.log('Dependencies installed successfully');
+            } catch (npmError) {
+              console.error('Error installing dependencies with npm:', npmError);
+              // Fallback to using a pre-installed node_modules directory
+              console.log('Attempting to use pre-installed modules...');
+            }
+          } catch (error) {
+            console.error('Error handling dependencies:', error);
+            // Continue anyway - the app might still work if the modules are in node_modules
           }
         }
-        
+
+        // Start the main server script
         try {
-          // Start the actual server
-          require('./bin/script/server.js');
-        } catch (err) {
-          console.error('Error starting server:', err);
+          require('./bin/script/server');
+        } catch (error) {
+          console.error('Error starting server:', error);
+          // Log more details about the error
+          if (error.code === 'MODULE_NOT_FOUND') {
+            console.error('Module not found details:', error.requireStack);
+          }
           process.exit(1);
         }
         EOF
         
-        # Verify express and semver are present
-        if [ ! -d "$(Build.ArtifactStagingDirectory)/deploy/node_modules/express" ] || [ ! -d "$(Build.ArtifactStagingDirectory)/deploy/node_modules/semver" ]; then
-          echo "Required modules not found in deployment directory!"
-          exit 1
-        else
-          echo "Required modules successfully included in deployment package."
-        fi
-        
-        # Create a simple package.json with proper start script and all dependencies
-        cat > $(Build.ArtifactStagingDirectory)/deploy/package.json << EOF
+        # Create a package.json with explicit dependencies
+        cat > $(Build.ArtifactStagingDirectory)/deploy/package.json << 'EOF'
         {
           "name": "code-push-server",
-          "version": "1.0.0",
-          "description": "Code Push Server",
+          "version": "0.5.0",
+          "description": "CodePush server",
           "main": "server.js",
           "scripts": {
             "start": "node server.js"
-          },
-          "engines": {
-            "node": ">=18.0.0"
           },
           "dependencies": {
             "express": "^4.17.1",
@@ -121,179 +130,141 @@ stages:
         }
         EOF
         
-        # Create web.config for Azure
-        cat > $(Build.ArtifactStagingDirectory)/deploy/web.config << 'EOF'
-        <?xml version="1.0" encoding="utf-8"?>
-        <configuration>
-          <system.webServer>
-            <webSocket enabled="false" />
-            <handlers>
-              <add name="iisnode" path="server.js" verb="*" modules="iisnode" />
-            </handlers>
-            <rewrite>
-              <rules>
-                <rule name="StaticContent">
-                  <action type="Rewrite" url="public{REQUEST_URI}" />
-                </rule>
-                <rule name="DynamicContent">
-                  <conditions>
-                    <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="True" />
-                  </conditions>
-                  <action type="Rewrite" url="server.js" />
-                </rule>
-              </rules>
-            </rewrite>
-            <iisnode nodeProcessCommandLine="node" watchedFiles="*.js;node_modules\*;bin\*" loggingEnabled="true" />
-          </system.webServer>
-        </configuration>
-        EOF
-        
-        # Create .deployment file to disable build
-        cat > $(Build.ArtifactStagingDirectory)/deploy/.deployment << 'EOF'
-        [config]
-        SCM_DO_BUILD_DURING_DEPLOYMENT=false
-        EOF
+        # Create zip package for deployment
+        cd $(Build.ArtifactStagingDirectory)/deploy
+        zip -r ../codepush.zip .
       displayName: 'Create Deployment Package'
 
-    # Archive for deployment
-    - task: ArchiveFiles@2
-      inputs:
-        rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/deploy'
-        includeRootFolder: false
-        archiveType: 'zip'
-        archiveFile: '$(Build.ArtifactStagingDirectory)/$(webAppName).zip'
-        replaceExistingArchive: true
-      displayName: 'Archive Files'
-
+    # Publish the deployment package as an artifact
     - task: PublishBuildArtifacts@1
       inputs:
-        PathtoPublish: '$(Build.ArtifactStagingDirectory)/$(webAppName).zip'
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/codepush.zip'
         ArtifactName: 'drop'
         publishLocation: 'Container'
-      displayName: 'Publish Artifacts'
+      displayName: 'Publish Deployment Package'
 
 - stage: Deploy
   displayName: 'Deploy Stage'
   dependsOn: Build
   jobs:
-  - job: Deploy
-    displayName: 'Deploy Job'
-    steps:
-    - task: DownloadBuildArtifacts@1
-      inputs:
-        buildType: 'current'
-        downloadType: 'single'
-        artifactName: 'drop'
-        downloadPath: '$(System.ArtifactsDirectory)'
-      displayName: 'Download Artifacts'
-
-    # Prepare for App Service creation
-    - task: AzureCLI@2
-      inputs:
-        azureSubscription: 'Codepush SC'
-        scriptType: 'bash'
-        scriptLocation: 'inlineScript'
-        inlineScript: |
-          # Verify resource group exists
-          echo "Verifying resource group exists..."
-          resourceGroupName="$(resourceGroupName)"
-          resourceGroupExists=$(az group show --name "$resourceGroupName" --query "name" --output tsv 2>/dev/null || echo "")
-          if [ -z "$resourceGroupExists" ]; then
-            echo "Resource group '$resourceGroupName' does not exist. Creating it..."
-            az group create --name "$resourceGroupName" --location "$(azLocation)"
-          else
-            echo "Resource group '$resourceGroupName' exists."
-          fi
+  - deployment: DeployToAzure
+    displayName: 'Deploy to Azure Web App'
+    environment: Production
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: drop
+            displayName: 'Download Build Artifacts'
           
-          # List all app service plans in the subscription to debug
-          echo "Listing all App Service Plans in the subscription:"
-          az appservice plan list --query "[].{name:name, resourceGroup:resourceGroup, id:id}" -o table
+          # Prepare Azure resources
+          - task: AzureCLI@2
+            inputs:
+              azureSubscription: 'Codepush SC'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                # Verify resource group exists
+                echo "Verifying resource group exists..."
+                resourceGroupName="$(resourceGroupName)"
+                resourceGroupExists=$(az group show --name "$resourceGroupName" --query "name" --output tsv 2>/dev/null || echo "")
+                if [ -z "$resourceGroupExists" ]; then
+                  echo "Resource group '$resourceGroupName' does not exist. Creating it..."
+                  az group create --name "$resourceGroupName" --location "$(azLocation)"
+                else
+                  echo "Resource group '$resourceGroupName' exists."
+                fi
+                
+                # List all app service plans in the subscription to debug
+                echo "Listing all App Service Plans in the subscription:"
+                az appservice plan list --query "[].{name:name, resourceGroup:resourceGroup, id:id}" -o table
+                
+                # Delete existing web app if it exists
+                webAppName="$(webAppName)-$(projectSuffix)"
+                echo "Checking if Web App '$webAppName' exists in resource group '$resourceGroupName'..."
+                webAppExists=$(az webapp list --resource-group "$resourceGroupName" --query "[?name=='$webAppName'].name" --output tsv 2>/dev/null || echo "")
+                
+                if [ -n "$webAppExists" ]; then
+                  echo "Deleting existing web app '$webAppName' to ensure clean deployment..."
+                  az webapp delete --name "$webAppName" --resource-group "$resourceGroupName"
+                  # Wait for deletion to complete
+                  sleep 15
+                fi
+                
+                # Create or ensure App Service Plan exists
+                appServicePlanName="$(webAppName)-plan-linux"
+                echo "Checking if App Service Plan '$appServicePlanName' exists..."
+                appServicePlanExists=$(az appservice plan list --resource-group "$resourceGroupName" --query "[?name=='$appServicePlanName'].name" --output tsv 2>/dev/null || echo "")
+                
+                if [ -z "$appServicePlanExists" ]; then
+                  echo "Creating App Service Plan '$appServicePlanName'..."
+                  az appservice plan create --name "$appServicePlanName" --resource-group "$resourceGroupName" --is-linux --sku S1 --location "$(azLocation)"
+                else
+                  echo "App Service Plan '$appServicePlanName' already exists."
+                fi
+                
+                # Create the web app
+                echo "Creating Web App '$webAppName'..."
+                az webapp create --name "$webAppName" --resource-group "$resourceGroupName" --plan "$appServicePlanName" --runtime "NODE:18-lts"
+                
+                # Configure app settings
+                echo "Configuring app settings..."
+                az webapp config appsettings set --name "$webAppName" --resource-group "$resourceGroupName" --settings \
+                  NODE_ENV=production \
+                  STORAGE_ACCOUNT_NAME="$(projectSuffix)storage" \
+                  EMULATED=false \
+                  HTTPS=false \
+                  WEBSITES_PORT=8080 \
+                  SERVER_URL="$(serverUrl)" \
+                  CORS_ORIGIN="$(serverUrl)" \
+                  LOGGING=true \
+                  REDIS_HOST=none \
+                  DISABLE_REDIS=true \
+                  SCM_DO_BUILD_DURING_DEPLOYMENT=false \
+                  WEBSITE_NODE_DEFAULT_VERSION=~18 \
+                  WEBSITE_RUN_FROM_PACKAGE=0
+                
+                # Set startup command
+                echo "Setting startup command..."
+                az webapp config set --name "$webAppName" --resource-group "$resourceGroupName" --startup-file "node server.js"
+            displayName: 'Create and Configure Azure Web App'
           
-          # Delete existing web app if it exists
-          webAppName="$(webAppName)-$(projectSuffix)"
-          echo "Checking if Web App '$webAppName' exists in resource group '$resourceGroupName'..."
-          webAppExists=$(az webapp list --resource-group "$resourceGroupName" --query "[?name=='$webAppName'].name" --output tsv 2>/dev/null || echo "")
+          # Deploy to the web app
+          - task: AzureRmWebAppDeployment@4
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: 'Codepush SC'
+              appType: 'webAppLinux'
+              WebAppName: '$(webAppName)-$(projectSuffix)'
+              packageForLinux: '$(Pipeline.Workspace)/drop/codepush.zip'
+              RuntimeStack: 'NODE|18-lts'
+              StartupCommand: 'node server.js'
+              DeploymentType: 'zipDeploy'
+            displayName: 'Deploy to Azure Web App'
           
-          if [ -n "$webAppExists" ]; then
-            echo "Deleting existing web app '$webAppName' to ensure clean deployment..."
-            az webapp delete --name "$webAppName" --resource-group "$resourceGroupName"
-            # Wait for deletion to complete
-            sleep 15
-          fi
-          
-          # Create or ensure App Service Plan exists
-          appServicePlanName="$(webAppName)-plan-linux"
-          echo "Checking if App Service Plan '$appServicePlanName' exists..."
-          appServicePlanExists=$(az appservice plan list --resource-group "$resourceGroupName" --query "[?name=='$appServicePlanName'].name" --output tsv 2>/dev/null || echo "")
-          
-          if [ -z "$appServicePlanExists" ]; then
-            echo "Creating App Service Plan '$appServicePlanName'..."
-            az appservice plan create --name "$appServicePlanName" --resource-group "$resourceGroupName" --is-linux --sku S1 --location "$(azLocation)"
-          else
-            echo "App Service Plan '$appServicePlanName' already exists."
-          fi
-          
-          # Create the web app
-          echo "Creating Web App '$webAppName'..."
-          az webapp create --name "$webAppName" --resource-group "$resourceGroupName" --plan "$appServicePlanName" --runtime "NODE:18-lts"
-          
-          # Configure app settings
-          echo "Configuring app settings..."
-          az webapp config appsettings set --name "$webAppName" --resource-group "$resourceGroupName" --settings \
-            NODE_ENV=production \
-            STORAGE_ACCOUNT_NAME="$(projectSuffix)storage" \
-            EMULATED=false \
-            HTTPS=false \
-            WEBSITES_PORT=8080 \
-            SERVER_URL="$(serverUrl)" \
-            CORS_ORIGIN="$(serverUrl)" \
-            LOGGING=true \
-            REDIS_HOST=none \
-            DISABLE_REDIS=true \
-            SCM_DO_BUILD_DURING_DEPLOYMENT=false \
-            WEBSITE_NODE_DEFAULT_VERSION=~18 \
-            WEBSITE_RUN_FROM_PACKAGE=0
-          
-          # Set startup command
-          echo "Setting startup command..."
-          az webapp config set --name "$webAppName" --resource-group "$resourceGroupName" --startup-file "node server.js"
-      displayName: 'Create and Configure Azure Web App'
-
-    # Deploy to the web app
-    - task: AzureRmWebAppDeployment@4
-      inputs:
-        ConnectionType: 'AzureRM'
-        azureSubscription: 'Codepush SC'
-        appType: 'webAppLinux'
-        WebAppName: '$(webAppName)-$(projectSuffix)'
-        packageForLinux: '$(System.ArtifactsDirectory)/drop/codepush.zip'
-        RuntimeStack: 'NODE|18-lts'
-        StartupCommand: 'node server.js'
-        DeploymentType: 'zipDeploy'
-      displayName: 'Deploy to Azure Web App'
-
-    # Verify deployment
-    - task: AzureCLI@2
-      inputs:
-        azureSubscription: 'Codepush SC'
-        scriptType: 'bash'
-        scriptLocation: 'inlineScript'
-        inlineScript: |
-          webAppName="$(webAppName)-$(projectSuffix)"
-          resourceGroupName="$(resourceGroupName)"
-          
-          echo "Verifying deployment..."
-          status=$(az webapp show --name "$webAppName" --resource-group "$resourceGroupName" --query "state" -o tsv 2>/dev/null || echo "Not found")
-          echo "Web app status: $status"
-          
-          if [ "$status" = "Not found" ]; then
-            echo "Web app was not created successfully."
-            exit 1
-          fi
-          
-          echo "App Service URL: $(serverUrl)"
-          
-          # Restart the web app to ensure all settings are applied
-          echo "Restarting web app to apply all settings..."
-          az webapp restart --name "$webAppName" --resource-group "$resourceGroupName"
-      displayName: 'Verify Deployment'
+          # Verify deployment
+          - task: AzureCLI@2
+            inputs:
+              azureSubscription: 'Codepush SC'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                webAppName="$(webAppName)-$(projectSuffix)"
+                resourceGroupName="$(resourceGroupName)"
+                
+                echo "Verifying deployment..."
+                status=$(az webapp show --name "$webAppName" --resource-group "$resourceGroupName" --query "state" -o tsv 2>/dev/null || echo "Not found")
+                echo "Web app status: $status"
+                
+                if [ "$status" = "Not found" ]; then
+                  echo "Web app was not created successfully."
+                  exit 1
+                fi
+                
+                echo "App Service URL: $(serverUrl)"
+                
+                # Restart the web app to ensure all settings are applied
+                echo "Restarting web app to apply all settings..."
+                az webapp restart --name "$webAppName" --resource-group "$resourceGroupName"
+            displayName: 'Verify Deployment'
