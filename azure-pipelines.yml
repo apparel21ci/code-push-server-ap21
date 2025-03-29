@@ -175,13 +175,24 @@ stages:
         }
         EOF
         
-        # Verify key modules are present
-        if [ ! -d "$(Build.ArtifactStagingDirectory)/deploy/node_modules/express" ] || [ ! -d "$(Build.ArtifactStagingDirectory)/deploy/node_modules/stream-to-array" ]; then
-          echo "Required modules not found in deployment directory!"
+        # Verify key files are present
+        echo "Verifying deployment package contents..."
+        if [ ! -f "$(Build.ArtifactStagingDirectory)/deploy/server.js" ]; then
+          echo "server.js is missing from deployment package!"
           exit 1
-        else
-          echo "Required modules successfully included in deployment package."
         fi
+        
+        if [ ! -d "$(Build.ArtifactStagingDirectory)/deploy/bin" ]; then
+          echo "bin directory is missing from deployment package!"
+          exit 1
+        fi
+        
+        if [ ! -d "$(Build.ArtifactStagingDirectory)/deploy/certs" ]; then
+          echo "certs directory is missing from deployment package!"
+          exit 1
+        fi
+        
+        echo "All required files are present in the deployment package."
         
         # Create a package.json with all dependencies
         cat > $(Build.ArtifactStagingDirectory)/deploy/package.json << 'EOF'
@@ -279,6 +290,72 @@ stages:
         archiveFile: '$(Build.ArtifactStagingDirectory)/$(webAppName).zip'
         replaceExistingArchive: true
       displayName: 'Archive Files'
+
+    # Verify the archive contains the required files
+    - bash: |
+        echo "Verifying archive contents..."
+        mkdir -p $(Build.ArtifactStagingDirectory)/verify
+        cd $(Build.ArtifactStagingDirectory)/verify
+        
+        # Check for server.js
+        unzip -l $(Build.ArtifactStagingDirectory)/$(webAppName).zip | grep server.js
+        if [ $? -ne 0 ]; then
+          echo "ERROR: server.js not found in the archive!"
+          exit 1
+        fi
+        echo "server.js found in the archive."
+        
+        # Check for bin directory
+        unzip -l $(Build.ArtifactStagingDirectory)/$(webAppName).zip | grep "bin/"
+        if [ $? -ne 0 ]; then
+          echo "ERROR: bin/ directory not found in the archive!"
+          exit 1
+        fi
+        echo "bin/ directory found in the archive."
+        
+        # Check for certs directory
+        unzip -l $(Build.ArtifactStagingDirectory)/$(webAppName).zip | grep "certs/"
+        if [ $? -ne 0 ]; then
+          echo "ERROR: certs/ directory not found in the archive!"
+          exit 1
+        fi
+        echo "certs/ directory found in the archive."
+        
+        # Check for node_modules directory
+        unzip -l $(Build.ArtifactStagingDirectory)/$(webAppName).zip | grep "node_modules/"
+        if [ $? -ne 0 ]; then
+          echo "ERROR: node_modules/ directory not found in the archive!"
+          exit 1
+        fi
+        echo "node_modules/ directory found in the archive."
+        
+        # Check for critical packages
+        echo "Checking for critical packages in the archive..."
+        CRITICAL_PACKAGES=("express" "semver" "body-parser" "cookie-parser" "morgan" "request" "stream-to-array" "@azure/data-tables" "@azure/storage-blob" "q" "redis")
+        
+        # Extract a list of all node_modules in the archive
+        unzip -l $(Build.ArtifactStagingDirectory)/$(webAppName).zip | grep "node_modules/" > node_modules_list.txt
+        
+        # Check each critical package
+        for package in "${CRITICAL_PACKAGES[@]}"; do
+          # Handle @ packages differently
+          if [[ $package == @* ]]; then
+            # Extract the part after the /
+            package_name=$(echo $package | sed 's/@//' | sed 's/\//\\\//')
+            grep -i "node_modules/$package_name" node_modules_list.txt
+          else
+            grep -i "node_modules/$package" node_modules_list.txt
+          fi
+          
+          if [ $? -ne 0 ]; then
+            echo "ERROR: Critical package '$package' not found in the archive!"
+            exit 1
+          fi
+          echo "Critical package '$package' found in the archive."
+        done
+        
+        echo "Archive verification completed successfully. All required files and packages are present."
+      displayName: 'Verify Archive Contents'
 
     - task: PublishBuildArtifacts@1
       inputs:
