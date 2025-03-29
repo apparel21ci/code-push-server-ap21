@@ -53,8 +53,11 @@ stages:
         # Install a specific version of semver known to work correctly
         npm install --no-save semver@7.3.8
         
+        # Install Azure packages separately to ensure they're properly included
+        npm install --no-save @azure/data-tables @azure/identity @azure/keyvault-secrets @azure/storage-blob @azure/storage-queue
+        
         # Install other dependencies
-        npm install --no-save express body-parser cookie-parser morgan request stream-to-array @azure/data-tables @azure/identity @azure/keyvault-secrets @azure/storage-blob @azure/storage-queue applicationinsights cookie-session ejs email-validator express-domain-middleware express-rate-limit multer node-deepcopy passport passport-azure-ad passport-github2 passport-http-bearer passport-windowslive q redis sanitize-html shortid streamifier superagent try-json yauzl yazl
+        npm install --no-save express body-parser cookie-parser morgan request stream-to-array applicationinsights cookie-session ejs email-validator express-domain-middleware express-rate-limit multer node-deepcopy passport passport-azure-ad passport-github2 passport-http-bearer passport-windowslive q redis sanitize-html shortid streamifier superagent try-json yauzl yazl
         
         # Generate self-signed certificates for SSL
         mkdir -p $(Build.ArtifactStagingDirectory)/deploy/certs
@@ -340,9 +343,13 @@ stages:
         for package in "${CRITICAL_PACKAGES[@]}"; do
           # Handle @ packages differently
           if [[ $package == @* ]]; then
-            # Extract the part after the /
-            package_name=$(echo $package | sed 's/@//' | sed 's/\//\\\//')
-            grep -i "node_modules/$package_name" node_modules_list.txt
+            # For scoped packages like @azure/data-tables, we need to check for node_modules/@azure/data-tables
+            # Extract scope and package name
+            scope=$(echo $package | cut -d'/' -f1)
+            pkg_name=$(echo $package | cut -d'/' -f2)
+            
+            echo "Checking for scoped package: $scope/$pkg_name"
+            grep -i "node_modules/$scope/$pkg_name" node_modules_list.txt
           else
             grep -i "node_modules/$package" node_modules_list.txt
           fi
