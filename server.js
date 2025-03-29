@@ -1,11 +1,15 @@
 console.log('Starting code-push-server...');
 
-const { execSync } = require('child_process');
+// Set environment variables to prevent common errors
+process.env.REDIS_HOST = process.env.REDIS_HOST || "none";
+process.env.DISABLE_REDIS = process.env.DISABLE_REDIS || "true";
+process.env.HTTPS = process.env.HTTPS || "false";
+
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 
-// Check for required dependencies
-const missingDeps = [];
+// Check for required dependencies - but don't install them
 const requiredDeps = [
   'express', 
   'semver', 
@@ -43,6 +47,16 @@ const requiredDeps = [
   'yazl'
 ];
 
+// Log which dependencies are found and which are missing, but don't install them
+for (const dep of requiredDeps) {
+  try {
+    require.resolve(dep);
+    console.log(`${dep} module found`);
+  } catch (e) {
+    console.log(`${dep} module not found, but continuing anyway`);
+  }
+}
+
 // Special handling for semver which has a known issue
 const semverPath = path.join(__dirname, 'node_modules', 'semver');
 const semverFunctionsPath = path.join(semverPath, 'functions');
@@ -58,36 +72,6 @@ if (!fs.existsSync(path.join(semverFunctionsPath, 'valid.js'))) {
     console.log('Semver reinstalled successfully');
   } catch (error) {
     console.error('Failed to reinstall semver:', error);
-  }
-}
-
-for (const dep of requiredDeps) {
-  try {
-    require.resolve(dep);
-    console.log(`${dep} module found`);
-  } catch (e) {
-    console.log(`${dep} module not found, will install`);
-    missingDeps.push(dep);
-  }
-}
-
-// Install any missing dependencies
-if (missingDeps.length > 0) {
-  try {
-    console.log(`Installing missing dependencies: ${missingDeps.join(', ')}`);
-    try {
-      // Use --no-save to avoid modifying package.json
-      // Use --no-fund to reduce output noise
-      // Use --no-audit to speed up installation
-      execSync(`npm install --no-save --no-fund --no-audit ${missingDeps.join(' ')}`, { stdio: 'inherit' });
-      console.log('Dependencies installed successfully');
-    } catch (npmError) {
-      console.error('Error installing dependencies with npm:', npmError);
-      console.log('Attempting to use pre-installed modules...');
-    }
-  } catch (error) {
-    console.error('Error handling dependencies:', error);
-    // Continue anyway - the app might still work if the modules are in node_modules
   }
 }
 
