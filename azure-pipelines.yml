@@ -345,6 +345,9 @@ stages:
         RuntimeStack: 'NODE|18-lts'
         StartupCommand: 'node server.js'
         DeploymentType: 'zipDeploy'
+        TakeAppOfflineFlag: true
+        ExcludeFilesFromAppDataFlag: true
+        RemoveAdditionalFilesFlag: true
       displayName: 'Deploy to Azure Web App'
 
     # Verify deployment
