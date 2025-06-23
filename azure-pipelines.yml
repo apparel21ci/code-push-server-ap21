@@ -1,6 +1,7 @@
 trigger:
   branches:
-    include: [main]
+    include:
+      - main
 
 pool:
   vmImage: 'ubuntu-latest'
@@ -9,14 +10,16 @@ steps:
 - task: NodeTool@0
   inputs:
     versionSpec: '18.x'
+  displayName: 'Install Node.js'
 
 - script: |
     cd api
     npm install
-    npm run build
-  displayName: 'Install and Build API'
+  displayName: 'Install dependencies'
 
 - task: PublishBuildArtifacts@1
   inputs:
-    pathToPublish: 'api/dist'
+    pathToPublish: 'api'
     artifactName: 'codepush-api'
+    publishLocation: 'Container'
+  displayName: 'Publish API artifact'
